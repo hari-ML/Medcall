@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Environment / secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# Backend data (user prescriptions + DB = PHI, never commit)
+backend/medrecall.db
+backend/medrecall.db.bak*
+backend/uploads/
+uploads/
+
+# Setup backup made during Phase 0
+_backup_pre_phase0/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+.vite/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

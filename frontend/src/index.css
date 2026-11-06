@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* MedRecall design system: calm healthcare (teal #0F766E + white),
+   LARGE readable text and big touch targets for elderly users. */
+
+@layer base {
+  html {
+    /* 18px root => every rem-based Tailwind size scales to the 18px baseline */
+    font-size: 1.125rem;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-800 antialiased;
+    font-family: system-ui, -apple-system, 'Segoe UI', 'Noto Sans Tamil',
+      'Noto Sans Devanagari', sans-serif;
+  }
+
+  /* visible keyboard focus everywhere */
+  :focus-visible {
+    outline: 3px solid #0f766e;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    @apply bg-brand-100 text-brand-900;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-6 py-4
+      text-lg font-semibold transition-colors select-none;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand-700 text-white shadow-md hover:bg-brand-800
+      active:bg-brand-900;
+  }
+
+  .btn-secondary {
+    @apply btn bg-white text-brand-700 border-2 border-brand-700
+      hover:bg-brand-50 active:bg-brand-100;
+  }
+
+  .btn-quiet {
+    @apply btn bg-slate-100 text-slate-700 hover:bg-slate-200;
+  }
+
+  .btn-danger-soft {
+    @apply btn bg-amber-50 text-amber-800 border-2 border-amber-400
+      hover:bg-amber-100;
+  }
+
+  .btn-disabled {
+    @apply btn bg-slate-200 text-slate-500 cursor-not-allowed shadow-none;
+  }
+
+  .btn-sm {
+    @apply px-4 py-2 text-base rounded-xl;
+  }
+
+  .card {
+    @apply bg-white rounded-card border border-slate-200 shadow-sm p-6;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-3 py-1
+      bg-slate-100 text-slate-700 text-base font-medium;
+  }
+
+  .chip-ok {
+    @apply inline-flex items-center gap-1 rounded-full px-3 py-1
+      bg-emerald-50 text-emerald-700 text-base font-medium;
+  }
+
+  .chip-warn {
+    @apply inline-flex items-center gap-1 rounded-full px-3 py-1
+      bg-amber-50 text-amber-800 text-base font-medium;
+  }
+
+  .chip-teal {
+    @apply inline-flex items-center gap-1 rounded-full px-3 py-1
+      bg-brand-50 text-brand-700 text-base font-medium;
+  }
+
+  .input {
+    @apply w-full rounded-xl border-2 border-slate-200 bg-white px-4 py-3
+      text-lg text-slate-800 placeholder:text-slate-400
+      focus:border-brand-600 focus:outline-none;
+  }
+
+  .label {
+    @apply block text-base font-semibold text-slate-600 mb-1;
+  }
+}
