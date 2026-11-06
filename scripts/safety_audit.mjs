@@ -51,12 +51,15 @@ function walk(dir) {
 // PART A — static enforcement-chain audit
 // ===========================================================================
 section('A1. only the uncertainty gate may produce the "clear" status')
-const backendPy = fs.readdirSync(APP).filter((f) => f.endsWith('.py'))
+// Recursive since Phase 1: routers/ and core/ subpackages count too — a
+// clear-assignment hiding in a new subpackage must still be caught.
+const backendPy = walk(APP).filter((f) => f.endsWith('.py'))
 const clearAssignments = []
 for (const file of backendPy) {
-  const text = read(path.join(APP, file))
+  const text = read(file)
+  const rel = path.relative(APP, file).split(path.sep).join('/')
   for (const match of text.matchAll(/\bstatus\s*=\s*(STATUS_CLEAR|["']clear["'])/g)) {
-    clearAssignments.push(`${file}: ${match[0]}`)
+    clearAssignments.push(`${rel}: ${match[0]}`)
   }
 }
 check(clearAssignments.length > 0, 'gate should produce clear somewhere')
@@ -93,11 +96,18 @@ check(/SCHEDULEABLE_STATUSES/.test(translateSrc), 'translate must consult the sa
 check(/raise UnclearItemError/.test(translateSrc), 'translate must raise on unclear')
 
 section('A6. API transitions: confirm→confirmed, edit→edited/unclear, never clear')
-const mainSrc = read(path.join(APP, 'main.py'))
-check(/item\.status = STATUS_CONFIRMED/.test(mainSrc), 'confirm transition missing')
-check(/item\.status = STATUS_EDITED/.test(mainSrc), 'edited transition missing')
-check(/item\.status = STATUS_UNCLEAR/.test(mainSrc), 'edit failure must stay unclear')
-check(!/item\.status = STATUS_CLEAR/.test(mainSrc), 'API must never assign clear')
+// Since Phase 1 the endpoint code lives in app/routers/ (main.py is assembly
+// only): positives must hold in the API layer (main.py + routers/*), the
+// "never assign clear" negative is enforced across the WHOLE backend tree.
+const apiLayerFiles = [path.join(APP, 'main.py'),
+  ...walk(path.join(APP, 'routers')).filter((f) => f.endsWith('.py'))]
+const apiLayerSrc = apiLayerFiles.map((f) => read(f)).join('\n')
+check(/item\.status = STATUS_CONFIRMED/.test(apiLayerSrc), 'confirm transition missing (main.py/routers)')
+check(/item\.status = STATUS_EDITED/.test(apiLayerSrc), 'edited transition missing (main.py/routers)')
+check(/item\.status = STATUS_UNCLEAR/.test(apiLayerSrc), 'edit failure must stay unclear (main.py/routers)')
+const clearInApiLayer = backendPy.filter((f) => /item\.status\s*=\s*STATUS_CLEAR/.test(read(f)))
+check(clearInApiLayer.length === 0,
+  `API must never assign clear: ${clearInApiLayer.map((f) => path.basename(f)).join(', ')}`)
 
 section('A7. edit schema cannot carry a status field')
 const schemasSrc = read(path.join(APP, 'schemas.py'))

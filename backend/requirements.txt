@@ -11,8 +11,12 @@ fastapi>=0.115
 # Python (3.14/3.15) without needing C++ build tools for uvloop/httptools/pyyaml.
 uvicorn>=0.30
 pydantic>=2.7
+pydantic-settings>=2.0
 SQLAlchemy>=2.0
 python-multipart>=0.0.9
+
+# --- Migrations ---------------------------------------------------------
+alembic>=1.13
 
 # --- OCR + image pipeline ----------------------------------------------
 pytesseract>=0.3.10
