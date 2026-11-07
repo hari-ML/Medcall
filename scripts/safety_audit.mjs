@@ -369,6 +369,59 @@ check([...seenStatuses].every((s) => ['clear', 'unclear', 'confirmed', 'edited']
   `unknown status observed: ${[...seenStatuses].join(',')}`)
 console.log(`   statuses observed across the audit: ${[...seenStatuses].join(', ')}`)
 
+section('B12. reminder engine: enroll/send only from the verified timetable')
+{
+  const demo3 = (await hit('/api/demo', { method: 'POST' })).body
+  const fixedSlot = (item) =>
+    SAFE.has(item.status) && !item.as_needed && (item.slots || []).length > 0
+  const eligible = demo3.items.filter(fixedSlot)
+  const excludedIds = new Set(demo3.items.filter((i) => !fixedSlot(i)).map((i) => i.id))
+
+  const enroll = await hit(`/api/prescriptions/${demo3.id}/reminders/enroll`, { method: 'POST' })
+  check(enroll.status === 200 && enroll.body?.scheduled_doses > 0, `enroll -> ${enroll.status}/${enroll.body?.scheduled_doses}`)
+  const enrolledIds = new Set((enroll.body?.items || []).map((entry) => entry.item_id))
+  check(enrolledIds.size > 0 && [...enrolledIds].every((id) => eligible.some((i) => i.id === id)),
+    'enrollment includes an unclear/as-needed item')
+  const skippedIds = new Set((enroll.body?.skipped || []).map((entry) => entry.item_id))
+  check([...excludedIds].every((id) => skippedIds.has(id)),
+    `excluded items not all skipped: ${[...skippedIds].join(',')}`)
+
+  const upcoming = await hit('/api/reminders/upcoming?days=2')
+  const occurrences = Array.isArray(upcoming.body) ? upcoming.body : []
+  check(upcoming.status === 200 && occurrences.length > 0, `upcoming -> ${upcoming.status}/${occurrences.length}`)
+  check(occurrences.every((occ) => enrolledIds.has(occ.item_id)),
+    'upcoming contains an occurrence for a non-enrolled item')
+  check(occurrences.every((occ) => ['08:00', '13:00', '18:00', '21:00'].includes(occ.local_time)),
+    'upcoming occurrence has a non-standard local time')
+
+  const consentBefore = await hit('/api/patients/me/consent')
+  check(Array.isArray(consentBefore.body) && consentBefore.body.every((c) => c.granted === false),
+    'a brand-new patient should start with no consent')
+
+  const runNoConsent = await hit('/api/reminders/run', { method: 'POST' })
+  check(runNoConsent.status === 200 && runNoConsent.body?.sent === 0,
+    `no-consent run sent something: ${JSON.stringify(runNoConsent.body)}`)
+
+  await hit('/api/patients/me/consent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channel: 'whatsapp', granted: true }),
+  })
+  const runConsent = await hit('/api/reminders/run', { method: 'POST' })
+  check(runConsent.status === 200 && (runConsent.body?.sent ?? 0) >= 0, `consented run -> ${runConsent.status}`)
+
+  const history = await hit('/api/reminders/history')
+  const sentOccurrences = (Array.isArray(history.body) ? history.body : []).filter((o) => o.status === 'sent')
+  check(sentOccurrences.every((occ) => enrolledIds.has(occ.item_id) && !excludedIds.has(occ.item_id)),
+    'a reminder was sent for an unclear/as-needed item')
+  check(sentOccurrences.every((occ) => occ.body.startsWith('MedRecall:')),
+    'sent reminder body missing the MedRecall prefix')
+  console.log(`   enrolled dose times: ${enroll.body?.scheduled_doses}, due sends this run: ${runConsent.body?.sent}`)
+
+  // leave no reminders running for the throwaway audit patient
+  await hit(`/api/prescriptions/${demo3.id}/reminders/enroll`, { method: 'DELETE' })
+}
+
 // ===========================================================================
 // verdict
 // ===========================================================================

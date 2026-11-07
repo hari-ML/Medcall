@@ -11,16 +11,15 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from ..channels import REMINDER_CHANNELS
 from ..core.deps import get_current_patient
 from ..db import get_db
 from ..models import ConsentRecord, Patient
+from ..reminders import update_language
 from ..schemas import ConsentIn, ConsentOut, PatientOut, PatientUpdateIn
 from .serializers import _patient_out
 
 router = APIRouter()
-
-#: the three reminder channels Phase 3+ will check before sending
-ALL_CHANNELS: tuple[str, ...] = ("whatsapp", "sms", "voice")
 
 
 def _consent_list(db: Session, patient_id: int) -> list[ConsentOut]:
@@ -37,7 +36,7 @@ def _consent_list(db: Session, patient_id: int) -> list[ConsentOut]:
             granted=bool(rows[channel].granted) if channel in rows else False,
             updated_at=rows[channel].updated_at if channel in rows else None,
         )
-        for channel in ALL_CHANNELS
+        for channel in REMINDER_CHANNELS
     ]
 
 
@@ -58,6 +57,10 @@ def update_me(
     db: Session = Depends(get_db),
 ) -> PatientOut:
     data = body.model_dump(exclude_unset=True)
+    language_changed = (
+        data.get("preferred_lang") is not None
+        and str(data["preferred_lang"]).strip() != patient.preferred_lang
+    )
 
     if data.get("timezone") is not None:
         tz = str(data["timezone"]).strip()
@@ -75,6 +78,10 @@ def update_me(
 
     db.commit()
     db.refresh(patient)
+    if language_changed:
+        # future reminder messages follow the new language
+        update_language(db, patient)
+        db.refresh(patient)
     return _patient_out(patient)
 
 

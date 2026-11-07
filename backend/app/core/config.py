@@ -59,6 +59,24 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="MEDRECALL_LOG_LEVEL")
     environment: str = Field(default="development", alias="MEDRECALL_ENV")
 
+    # --- Reminder engine (Phase 3) ----------------------------------------
+    #: background dispatcher loop (tests disable it; a cron/CLI tick works too)
+    reminder_dispatcher: bool = Field(default=True, alias="MEDRECALL_REMINDER_DISPATCHER")
+    reminder_interval_seconds: int = Field(
+        default=30, alias="MEDRECALL_REMINDER_INTERVAL_SECONDS"
+    )
+    #: how far ahead occurrences are generated
+    reminder_horizon_hours: int = Field(default=48, alias="MEDRECALL_REMINDER_HORIZON_HOURS")
+    #: a due reminder older than this is marked missed, never sent late
+    reminder_grace_minutes: int = Field(
+        default=120, alias="MEDRECALL_REMINDER_GRACE_MINUTES"
+    )
+    #: failed delivery attempts before an occurrence is marked failed
+    reminder_max_attempts: int = Field(default=3, alias="MEDRECALL_REMINDER_MAX_ATTEMPTS")
+    #: "fake" (development default) records sends instead of contacting a
+    #: provider; production always uses real adapters (unconfigured -> failed)
+    channel_mode: str = Field(default="fake", alias="MEDRECALL_CHANNEL_MODE")
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
@@ -66,6 +84,10 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment.strip().lower() == "production"
+
+    @property
+    def use_fake_channels(self) -> bool:
+        return self.channel_mode.strip().lower() == "fake" and not self.is_production
 
 
 _dev_key: str | None = None

@@ -32,6 +32,7 @@ from ..models import Patient, Prescription
 from ..ocr import OcrError, ocr_file
 from ..parser import parse_line
 from ..pdf import render_timetable_pdf
+from ..reminders import sync_item_schedules
 from ..schemas import ItemOut, PatchItemIn, PrescriptionOut, ReminderOut, ScheduleOut
 from ..schedule import build_reminders, build_schedule
 from ..seed import create_prescription_from_ocr
@@ -172,6 +173,10 @@ def patch_item(
         item.reason = ""
         db.commit()
         db.refresh(item)
+        # If the prescription is enrolled, refresh this item's schedules
+        # (no-op when it was never enrolled).
+        sync_item_schedules(db, item, patient)
+        db.refresh(item)
         return _item_out(item)
 
     # action == "edit": rebuild the line, RE-VALIDATE with the gate.
@@ -207,6 +212,10 @@ def patch_item(
         item.reason = result.reason
 
     db.commit()
+    db.refresh(item)
+    # SAFETY: if the edit made the item unclear again, all its schedules are
+    # deactivated and pending occurrences cancelled (and vice versa).
+    sync_item_schedules(db, item, patient)
     db.refresh(item)
     return _item_out(item)
 

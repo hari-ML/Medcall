@@ -191,19 +191,38 @@ Real upload: click **Scan prescription** and drop a JPG/PNG/PDF of a prescriptio
 
 ## API
 
+Every `/api/*` route except `/api/health` and the two OTP login routes requires
+`Authorization: Bearer <access token>` (phone + OTP login; dev mode echoes the
+code). Prescriptions are scoped to the caller — someone else's id is a 404.
+
 | Method | Path | Purpose |
 |---|---|---|
+| `POST` | `/api/auth/otp/request` | request a phone OTP (dev echoes `dev_code`) |
+| `POST` | `/api/auth/otp/verify` | verify OTP → access token + refresh cookie |
+| `POST` | `/api/auth/refresh` | rotate the refresh token (cookie) |
+| `POST` | `/api/auth/logout` | end the session |
+| `GET/PATCH` | `/api/patients/me` | own profile (language/timezone/caregiver) |
+| `GET/POST` | `/api/patients/me/consent` | per-channel communication consent (default deny) |
+| `GET` | `/api/prescriptions` | own prescriptions, newest first |
 | `POST` | `/api/prescriptions` | multipart upload (JPG/PNG/PDF, ≤10 MB) → parsed items |
 | `GET` | `/api/prescriptions/{id}` | same payload for the review screen |
 | `PATCH` | `/api/prescriptions/{id}/items/{item_id}` | `{action:"confirm"\|"edit", fields?}` |
 | `POST` | `/api/prescriptions/{id}/schedule?lang=en\|ta\|hi` | 4-slot timetable + `excluded[]` |
 | `GET` | `/api/prescriptions/{id}/timetable.pdf?lang=...` | printable PDF |
-| `GET` | `/api/prescriptions/{id}/reminders?lang=...` | `[{time, medicine, instruction}]` |
+| `GET` | `/api/prescriptions/{id}/reminders?lang=...` | `[{time, medicine, instruction}]` (display only) |
+| `POST/DELETE` | `/api/prescriptions/{id}/reminders/enroll` | start/stop the reminder engine for a prescription |
+| `GET` | `/api/reminders/upcoming?days=` | pending occurrences (patient-local times) |
+| `POST` | `/api/reminders/run` | one manual generate + dispatch tick |
+| `GET` | `/api/reminders/history` | sent / blocked / failed / missed occurrences |
 | `POST` | `/api/demo` | prefilled prescription (3 clear + 1 unclear) |
 | `GET` | `/api/health` | Tesseract + language availability |
 
 Item statuses: `clear | unclear | confirmed | edited`.
-**Only** `clear/confirmed/edited` reach translation, schedule, PDF and reminders.
+**Only** `clear/confirmed/edited` reach translation, schedule, PDF and reminders;
+SOS/PRN items never get a fixed-time reminder.
+
+Existing databases need the Alembic migrations before the first start:
+`cd backend && alembic upgrade head` (Phase 3 head: `c63b9c2fe09c`).
 
 ---
 
@@ -211,7 +230,7 @@ Item statuses: `clear | unclear | confirmed | edited`.
 
 ```bash
 cd backend
-pytest            # 257 tests: parser, gate, translation, safety invariants, API
+pytest            # 310 tests: parser, gate, translation, safety invariants, auth, reminders, API
 ```
 
 What the suite covers:
@@ -223,7 +242,11 @@ What the suite covers:
 * **the explicit safety test**: an *unclear* item never appears in the schedule,
   the PDF data, or the reminders (`tests/test_schedule_safety.py`);
 * confirm/edit flow + full API tests through FastAPI's `TestClient`, including a
-  real end-to-end OCR upload.
+  real end-to-end OCR upload;
+* patient isolation (other patients' records are 404, never 403);
+* the reminder engine: enrollment skips unclear/SOS items, occurrences follow the
+  patient's timezone, and nothing is sent without consent or outside the grace
+  window (`tests/test_reminders.py`).
 
 ## Safety audit
 
@@ -232,8 +255,8 @@ limitations — is in **[`SAFETY_AUDIT.md`](SAFETY_AUDIT.md)**. It is reproducib
 
 ```bash
 # with the backend running on :8000, from the repo root
-node scripts/safety_audit.mjs      # 75 checks — static enforcement + live adversarial
-node scripts/api_contract.mjs      # 212 checks — every payload the five pages consume
+node scripts/safety_audit.mjs      # 88 checks — static enforcement + live adversarial (incl. reminder engine)
+node scripts/api_contract.mjs      # 216 checks — every payload the five pages consume
 node scripts/frontend_verify.mjs   # 195 checks — bundle, i18n, SSR of all routes
 ```
 

@@ -25,6 +25,9 @@ _TEMP_DB = Path(os.environ.get("TEMP", str(BACKEND_DIR))) / (
     f"medrecall_pytest_{uuid.uuid4().hex[:8]}.db"
 )
 os.environ["MEDRECALL_DB"] = str(_TEMP_DB)
+# The reminder dispatcher must not tick in the background during tests;
+# reminder tests call the engine directly with controlled clocks.
+os.environ["MEDRECALL_REMINDER_DISPATCHER"] = "off"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

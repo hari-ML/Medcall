@@ -196,3 +196,53 @@ class ConsentOut(BaseModel):
     granted: bool
     #: None when no consent row exists yet (channel never touched)
     updated_at: Optional[datetime] = None
+
+
+# ---------------------------------------------------------------------------
+# Reminder engine (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class EnrolledItemOut(BaseModel):
+    item_id: int
+    medicine: str
+    slot: str
+    #: local HH:MM in the patient's timezone
+    time_of_day: str
+
+
+class SkippedItemOut(BaseModel):
+    item_id: int
+    medicine: str
+    reason: str
+
+
+class EnrollmentOut(BaseModel):
+    scheduled_doses: int
+    items: list[EnrolledItemOut]
+    skipped: list[SkippedItemOut]
+
+
+class OccurrenceOut(BaseModel):
+    id: int
+    item_id: int
+    medicine: str
+    slot: str
+    #: naive UTC ISO timestamp
+    scheduled_at: datetime
+    #: HH:MM in the patient's IANA timezone
+    local_time: str
+    status: str
+    channel: str
+    body: str
+    error: str
+    sent_at: Optional[datetime] = None
+
+
+class ReminderRunOut(BaseModel):
+    generated: int
+    sent: int
+    blocked: int
+    failed: int
+    missed: int
+    cancelled: int

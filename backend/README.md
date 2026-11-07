@@ -55,13 +55,31 @@ real database (`MEDRECALL_DB` is overridden to a temp file by `tests/conftest.py
 | `pdf.py` | ReportLab timetable: 4 slots, as-needed, amber excluded box, disclaimer footer; Noto fonts with graceful fallback |
 | `models.py / db.py / schemas.py` | SQLAlchemy tables + Pydantic v2 API models |
 | `seed.py` | `DEMO_TEXT`, shared prescription builder, CLI seeder |
-| `main.py` | endpoints, validation (≤10 MB, JPG/PNG/PDF), CORS, static uploads, clean JSON errors |
+| `main.py` | app assembly: settings, CORS, middleware, exception handlers, dispatcher lifespan, `init_db()` |
+| `core/` | `config.py` (settings/env/uploads), `logging.py`, `middleware.py` (request-ID), `security.py` (JWT/OTP/signed URLs), `deps.py` (`get_current_patient`) |
+| `routers/` | `auth.py`, `patients.py`, `prescriptions.py`, `reminders.py`, `system.py`, `serializers.py` |
+| `reminders.py` | Phase 3 engine: enrollment, timezone-aware occurrence generation, consent-gated dispatch, background loop + `python -m app.reminders --tick` |
+| `channels/` | `ChannelAdapter` interface, `FakeChannel` (dev), credential-gated WhatsApp/SMS/voice adapters |
+
+Migrations live in `alembic/versions/` — baseline `4fe1831b87e1`, Phase 2
+`c8b4f272dc02`, Phase 3 `c63b9c2fe09c`. Run `alembic upgrade head` from
+`backend/` before starting against an existing database.
 
 ## Environment variables
 
 | Variable | Purpose | Default |
 |---|---|---|
 | `MEDRECALL_DB` | SQLite file path or SQLAlchemy URL (used by tests) | `backend/medrecall.db` |
+| `MEDRECALL_ENV` | `development` \| `production` (production disables dev OTP echoes and sets `Secure` cookies) | `development` |
+| `MEDRECALL_SECRET_KEY` | JWT/OTP HMAC secret — set a real one in production | random per process (dev) |
+| `MEDRECALL_CORS_ORIGINS` | comma-separated allowed origins | localhost dev origins |
+| `MEDRECALL_LOG_LEVEL` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` | `INFO` |
+| `MEDRECALL_REMINDER_DISPATCHER` | start the background reminder loop | on (`off` in tests) |
+| `MEDRECALL_REMINDER_INTERVAL_SECONDS` | dispatcher tick interval | `30` |
+| `MEDRECALL_REMINDER_HORIZON_HOURS` | how far ahead occurrences are generated | `48` |
+| `MEDRECALL_REMINDER_GRACE_MINUTES` | late-delivery window; older doses become `missed` | `120` |
+| `MEDRECALL_REMINDER_MAX_ATTEMPTS` | failed send attempts before `failed` | `3` |
+| `MEDRECALL_CHANNEL_MODE` | `fake` records sends locally (ignored in production) | `fake` |
 
 ## Safety rule (enforced, not just documented)
 
@@ -69,11 +87,16 @@ real database (`MEDRECALL_DB` is overridden to a temp file by `tests/conftest.py
 2. Humans produce `confirmed` (PATCH `confirm`) or `edited` (PATCH `edit`,
    re-parsed **and re-gated** — an incomplete edit stays `unclear`).
 3. There is **no code path** that turns `unclear` into `clear`.
-4. `schedule.build_schedule()`, `schedule.build_reminders()` and `pdf.py` all
-   filter through `is_scheduleable()`; `translate.py` raises `UnclearItemError`
-   if an unsafe item ever slips through (defense in depth).
+4. `schedule.build_schedule()`, `schedule.build_reminders()`, `pdf.py` and
+   `reminders.py` all filter through `is_scheduleable()`; `translate.py` raises
+   `UnclearItemError` if an unsafe item ever slips through (defense in depth).
 5. `tests/test_schedule_safety.py` proves an unclear item never reaches the
    schedule, the PDF data, or the reminders.
+6. The dispatcher re-checks schedule active + item scheduleable + not as-needed
+   + grace window + explicit channel consent immediately before every send.
+   No consent → `blocked`; unconfigured provider → `failed` (never “sent”).
+   `tests/test_reminders.py` proves each gate, including edit-to-unclear
+   cancelling pending occurrences.
 
 ## Error responses
 
@@ -82,7 +105,10 @@ All errors are plain JSON: `{"detail": "…"}`
 | Status | When |
 |---|---|
 | 400 | empty file, edit without `fields` |
-| 404 | unknown prescription/item |
+| 401 | missing/invalid/expired access token |
+| 403 | bad, forged or expired signed image URL |
+| 404 | unknown prescription/item — also someone else's record (no existence leak) |
 | 413 | upload > 10 MB |
 | 415 | not JPG/PNG/PDF |
-| 422 | OCR failure, no medicine lines found, invalid `lang` |
+| 422 | OCR failure, no medicine lines found, invalid `lang`/timezone |
+| 429 | too many OTP requests for one phone |
