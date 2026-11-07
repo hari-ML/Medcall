@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 
 from .. import __version__
 from ..core.config import UPLOAD_DIR
+from ..core.deps import get_current_patient
 from ..db import get_db
+from ..models import Patient
 from ..ocr import OcrError, configure_tesseract, find_poppler, find_tesseract
 from ..schemas import HealthOut, PrescriptionOut
 from ..seed import DEMO_TEXT, create_prescription_from_ocr, text_to_ocr_lines
@@ -49,7 +51,10 @@ def _render_demo_image(text: str) -> str:
 
 
 @router.post("/api/demo", response_model=PrescriptionOut, status_code=201)
-def create_demo(db: Session = Depends(get_db)) -> PrescriptionOut:
+def create_demo(
+    patient: Patient = Depends(get_current_patient),
+    db: Session = Depends(get_db),
+) -> PrescriptionOut:
     """Prefilled prescription: three clear lines + one 'Dose unreadable' line."""
     image_filename = _render_demo_image(DEMO_TEXT)
     prescription = create_prescription_from_ocr(
@@ -58,6 +63,7 @@ def create_demo(db: Session = Depends(get_db)) -> PrescriptionOut:
         image_filename=image_filename,
         original_filename="demo_prescription.png",
         content_type="image/png",
+        patient_id=patient.id,
     )
     return _prescription_out(prescription)
 

@@ -18,6 +18,10 @@ python-multipart>=0.0.9
 # --- Migrations ---------------------------------------------------------
 alembic>=1.13
 
+# --- Auth (Phase 2) -------------------------------------------------------
+PyJWT>=2.8
+tzdata>=2024.1  # IANA zones for zoneinfo on Windows (Patient.timezone)
+
 # --- OCR + image pipeline ----------------------------------------------
 pytesseract>=0.3.10
 Pillow>=10.3

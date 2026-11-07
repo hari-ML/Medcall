@@ -51,8 +51,12 @@ def create_prescription_from_ocr(
     original_filename: str = "",
     content_type: str = "",
     lang: str = "en",
+    patient_id: int | None = None,
 ) -> Prescription:
     """Run extract -> parse -> gate on OCR lines and persist a prescription.
+
+    ``patient_id`` (Phase 2) records the owning account; rows created before
+    accounts existed stay NULL orphans and are invisible to every patient.
 
     Raises ValueError if no medicine lines are found (caller decides the
     HTTP error). Commits the session.
@@ -69,6 +73,7 @@ def create_prescription_from_ocr(
         original_filename=original_filename,
         content_type=content_type,
         lang=lang,
+        patient_id=patient_id,
     )
     db.add(prescription)
     db.flush()  # assign prescription.id

@@ -1,19 +1,35 @@
-"""MedRecall FastAPI application — assembly only (Phase 1).
+"""MedRecall FastAPI application — assembly only (Phase 1, Phase 2).
 
 Endpoints
 ---------
-POST   /api/prescriptions                          upload image/PDF -> OCR -> items
-GET    /api/prescriptions/{id}                     fetch for the review screen
-PATCH  /api/prescriptions/{id}/items/{item_id}     confirm / edit an unclear item
-POST   /api/prescriptions/{id}/schedule?lang=...   timetable (clear/confirmed/edited only)
-GET    /api/prescriptions/{id}/timetable.pdf       printable PDF
-GET    /api/prescriptions/{id}/reminders?lang=...  reminder feed
-GET    /api/health                                 OCR availability check
-POST   /api/demo                                   prefilled prescription (no OCR)
+POST   /api/auth/otp/request                     request a phone OTP (dev echoes the code)
+POST   /api/auth/otp/verify                      verify OTP -> access token + refresh cookie
+POST   /api/auth/refresh                         rotate the refresh token (cookie)
+POST   /api/auth/logout                          end the session (cookie)
+GET    /api/patients/me                          own profile
+PATCH  /api/patients/me                          update own profile (lang/timezone/caregiver)
+GET    /api/patients/me/consent                  own per-channel communication consent
+POST   /api/patients/me/consent                  grant/revoke consent for a channel
+GET    /api/prescriptions                        own prescriptions, newest first
+POST   /api/prescriptions                        upload image/PDF -> OCR -> items
+GET    /api/prescriptions/{id}                   fetch for the review screen (own only)
+PATCH  /api/prescriptions/{id}/items/{item_id}   confirm / edit an unclear item
+POST   /api/prescriptions/{id}/schedule?lang=... timetable (clear/confirmed/edited only)
+GET    /api/prescriptions/{id}/timetable.pdf     printable PDF
+GET    /api/prescriptions/{id}/reminders?lang=... reminder feed
+GET    /api/health                               OCR availability check
+POST   /api/demo                                 prefilled prescription (no OCR)
+GET    /uploads/{filename}?exp=..&sig=..         signed, expiring image URL (15 min)
 
-Route handlers live in ``app/routers/`` (``prescriptions.py``, ``system.py``);
-this module wires the app together: settings, logging, CORS, request-ID
-middleware, exception handlers, static uploads and ``init_db()``.
+Route handlers live in ``app/routers/`` (``auth.py``, ``patients.py``,
+``prescriptions.py``, ``system.py``); this module wires the app together:
+settings, logging, CORS, request-ID middleware, exception handlers and
+``init_db()``.
+
+Auth (Phase 2): every /api/* route except /api/health and the /api/auth
+login routes requires a Bearer access token; prescriptions are scoped to
+the caller (someone else's id -> 404, no existence leak). Uploaded images
+are no longer served by a public static mount — only via signed URLs.
 
 THE SAFETY RULE: unclear items are never translated, scheduled, printed or
 used for reminders — see uncertainty.SCHEDULEABLE_STATUSES; the only status
@@ -26,7 +42,6 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from . import DISCLAIMER, __version__
 from .core.config import UPLOAD_DIR, get_settings
@@ -34,7 +49,7 @@ from .core.logging import setup_logging
 from .core.middleware import RequestContextMiddleware
 from .db import init_db
 from .ocr import OcrError
-from .routers import prescriptions, system
+from .routers import auth, patients, prescriptions, system
 from .translate import TranslationError, UnsupportedLanguageError
 
 # ---------------------------------------------------------------------------
@@ -61,7 +76,9 @@ app.add_middleware(
 )
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+# NOTE (Phase 2): the public StaticFiles mount for /uploads is intentionally
+# gone — images are served by routers/prescriptions.py::get_prescription_image
+# through signed, 15-minute expiring URLs (core.security.sign_image_url).
 
 init_db()  # create tables on import (idempotent)
 
@@ -86,5 +103,7 @@ async def _translation_error_handler(request, exc: TranslationError):  # noqa: A
 # Routes
 # ---------------------------------------------------------------------------
 
+app.include_router(auth.router)
+app.include_router(patients.router)
 app.include_router(prescriptions.router)
 app.include_router(system.router)

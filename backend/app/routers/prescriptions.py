@@ -13,16 +13,22 @@ unchanged). Two behavioural notes:
 
 from __future__ import annotations
 
+import hmac
+import re
+import time
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from ..core.config import UPLOAD_DIR
+from ..core.deps import get_current_patient
+from ..core.security import sign_image_url
 from ..db import get_db
+from ..models import Patient, Prescription
 from ..ocr import OcrError, ocr_file
 from ..parser import parse_line
 from ..pdf import render_timetable_pdf
@@ -33,7 +39,7 @@ from ..uncertainty import STATUS_CLEAR, STATUS_CONFIRMED, STATUS_EDITED, STATUS_
 from .serializers import (
     _compose_source_text,
     _get_item,
-    _get_prescription,
+    _get_owned_prescription,
     _item_dict,
     _item_out,
     _prescription_out,
@@ -54,6 +60,7 @@ def _ocr_and_create(
     image_filename: str,
     original_filename: str,
     content_type: str,
+    patient_id: int | None = None,
 ):
     """OCR + persist in a worker thread (keeps the event loop responsive)."""
     ocr_lines = ocr_file(path, is_pdf=is_pdf)
@@ -63,12 +70,14 @@ def _ocr_and_create(
         image_filename=image_filename,
         original_filename=original_filename,
         content_type=content_type,
+        patient_id=patient_id,
     )
 
 
 @router.post("/api/prescriptions", response_model=PrescriptionOut, status_code=201)
 async def upload_prescription(
     file: UploadFile = File(..., description="JPG / PNG / PDF photo of a prescription (max 10 MB)"),
+    patient: Patient = Depends(get_current_patient),
     db: Session = Depends(get_db),
 ) -> PrescriptionOut:
     content_type = (file.content_type or "").lower()
@@ -105,6 +114,7 @@ async def upload_prescription(
             image_filename=filename,
             original_filename=file.filename or filename,
             content_type=content_type,
+            patient_id=patient.id,
         )
     except OcrError:
         path.unlink(missing_ok=True)
@@ -116,9 +126,28 @@ async def upload_prescription(
     return _prescription_out(prescription)
 
 
+@router.get("/api/prescriptions", response_model=list[PrescriptionOut])
+def list_prescriptions(
+    patient: Patient = Depends(get_current_patient),
+    db: Session = Depends(get_db),
+) -> list[PrescriptionOut]:
+    """The caller's own prescriptions, newest first (Phase 2)."""
+    rows = (
+        db.query(Prescription)
+        .filter(Prescription.patient_id == patient.id)
+        .order_by(Prescription.created_at.desc(), Prescription.id.desc())
+        .all()
+    )
+    return [_prescription_out(row) for row in rows]
+
+
 @router.get("/api/prescriptions/{prescription_id}", response_model=PrescriptionOut)
-def get_prescription(prescription_id: int, db: Session = Depends(get_db)) -> PrescriptionOut:
-    return _prescription_out(_get_prescription(db, prescription_id))
+def get_prescription(
+    prescription_id: int,
+    patient: Patient = Depends(get_current_patient),
+    db: Session = Depends(get_db),
+) -> PrescriptionOut:
+    return _prescription_out(_get_owned_prescription(db, prescription_id, patient))
 
 
 # ---------------------------------------------------------------------------
@@ -131,9 +160,10 @@ def patch_item(
     prescription_id: int,
     item_id: int,
     body: PatchItemIn,
+    patient: Patient = Depends(get_current_patient),
     db: Session = Depends(get_db),
 ) -> ItemOut:
-    prescription = _get_prescription(db, prescription_id)
+    prescription = _get_owned_prescription(db, prescription_id, patient)
     item = _get_item(prescription, item_id)
 
     if body.action == "confirm":
@@ -190,9 +220,10 @@ def patch_item(
 def post_schedule(
     prescription_id: int,
     lang: str = Query("en", pattern="^(en|ta|hi)$"),
+    patient: Patient = Depends(get_current_patient),
     db: Session = Depends(get_db),
 ) -> ScheduleOut:
-    prescription = _get_prescription(db, prescription_id)
+    prescription = _get_owned_prescription(db, prescription_id, patient)
     items = [_item_dict(i) for i in prescription.items]
     return build_schedule(items, lang=lang)  # type: ignore[return-value]
 
@@ -201,9 +232,10 @@ def post_schedule(
 def get_timetable_pdf(
     prescription_id: int,
     lang: str = Query("en", pattern="^(en|ta|hi)$"),
+    patient: Patient = Depends(get_current_patient),
     db: Session = Depends(get_db),
 ) -> Response:
-    prescription = _get_prescription(db, prescription_id)
+    prescription = _get_owned_prescription(db, prescription_id, patient)
     items = [_item_dict(i) for i in prescription.items]
     try:
         pdf_bytes = render_timetable_pdf(items, lang=lang)
@@ -221,8 +253,50 @@ def get_timetable_pdf(
 def get_reminders(
     prescription_id: int,
     lang: str = Query("en", pattern="^(en|ta|hi)$"),
+    patient: Patient = Depends(get_current_patient),
     db: Session = Depends(get_db),
 ) -> list[ReminderOut]:
-    prescription = _get_prescription(db, prescription_id)
+    prescription = _get_owned_prescription(db, prescription_id, patient)
     items = [_item_dict(i) for i in prescription.items]
     return build_reminders(items, lang=lang)  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# Uploaded images — signed, expiring URLs (Phase 2: public mount removed)
+# ---------------------------------------------------------------------------
+
+#: stored file names are uuid-hex + extension; anything else is rejected
+_IMAGE_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
+
+
+@router.get("/uploads/{filename}")
+def get_prescription_image(
+    filename: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """Serve an uploaded image through its signed, expiring URL.
+
+    Access requires ``?exp=<unix-ts>&sig=HMAC(secret, "<prescription_id>:<filename>:<exp>")``
+    (see ``core.security.sign_image_url``), valid for 15 minutes. No Bearer
+    token is needed so plain ``<img src>`` embedding keeps working.
+    """
+    if not _IMAGE_FILENAME_RE.match(filename):
+        raise HTTPException(status_code=404, detail="Image not found.")
+    path = UPLOAD_DIR / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found.")
+    prescription = (
+        db.query(Prescription).filter(Prescription.image_filename == filename).first()
+    )
+    if prescription is None:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    try:
+        exp = int(request.query_params.get("exp", ""))
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Image link is invalid.") from None
+    sig = request.query_params.get("sig", "")
+    expected = sign_image_url(prescription.id, filename, exp)
+    if exp < int(time.time()) or not hmac.compare_digest(expected, sig):
+        raise HTTPException(status_code=403, detail="Image link is expired or invalid.")
+    return FileResponse(path)

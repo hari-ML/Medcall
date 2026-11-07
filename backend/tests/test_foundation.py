@@ -86,7 +86,12 @@ def test_request_id_header_on_error_responses(client):
 
 
 def test_alembic_upgrade_head_rebuilds_the_live_schema(tmp_path):
-    """`alembic upgrade head` on an empty DB == `init_db()` create_all schema."""
+    """`alembic upgrade head` on an empty DB == `init_db()` create_all schema.
+
+    Compared SEMANTICALLY via reflection (columns, PKs, FKs, uniques,
+    indexes) — alembic's SQLite batch rebuild may emit constraint clauses in
+    a different order / with quoted identifiers, which is not a difference.
+    """
     migrated = tmp_path / "migrated.db"
     created = tmp_path / "created.db"
 
@@ -101,9 +106,8 @@ def test_alembic_upgrade_head_rebuilds_the_live_schema(tmp_path):
     )
     assert proc.returncode == 0, f"alembic upgrade failed:\n{proc.stdout}\n{proc.stderr}"
 
-    # build the same schema through the app's model metadata (same path
-    # init_db() uses, bound explicitly to the second file)
-    from sqlalchemy import create_engine
+    # build the same schema through the app's model metadata
+    from sqlalchemy import create_engine, inspect
 
     from app.models import Base
 
@@ -111,21 +115,39 @@ def test_alembic_upgrade_head_rebuilds_the_live_schema(tmp_path):
     Base.metadata.create_all(engine)
     engine.dispose()
 
-    def objects(path: Path) -> list[tuple]:
-        con = sqlite3.connect(path)
-        try:
-            return [
-                (t, n, " ".join((s or "").split()))
-                for t, n, s in con.execute(
-                    "SELECT type, name, sql FROM sqlite_master "
-                    "WHERE name NOT LIKE 'sqlite_%' AND name != 'alembic_version' "
-                    "ORDER BY type, name"
+    def describe(path: Path) -> dict:
+        eng = create_engine(f"sqlite:///{path}")
+        insp = inspect(eng)
+        out = {}
+        for table in sorted(insp.get_table_names()):
+            if table == "alembic_version":
+                continue
+            fks = sorted(
+                (
+                    tuple(fk["constrained_columns"]),
+                    fk["referred_table"],
+                    tuple(fk["referred_columns"]),
+                    fk.get("ondelete"),
                 )
-            ]
-        finally:
-            con.close()
+                for fk in insp.get_foreign_keys(table)
+            )
+            uqs = sorted(tuple(u["column_names"]) for u in insp.get_unique_constraints(table))
+            indexes = sorted(
+                (ix["name"], tuple(ix["column_names"]), bool(ix.get("unique")))
+                for ix in insp.get_indexes(table)
+                if not ix["name"].startswith("sqlite_autoindex")
+            )
+            out[table] = {
+                "columns": [(c["name"], str(c["type"]), c["nullable"]) for c in insp.get_columns(table)],
+                "pk": insp.get_pk_constraint(table)["constrained_columns"],
+                "fks": fks,
+                "uniques": uqs,
+                "indexes": indexes,
+            }
+        eng.dispose()
+        return out
 
-    assert objects(migrated) == objects(created), "alembic schema != init_db schema"
+    assert describe(migrated) == describe(created), "alembic schema != init_db schema"
 
     # and the migration bookkeeping exists
     con = sqlite3.connect(migrated)

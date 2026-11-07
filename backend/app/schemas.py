@@ -126,3 +126,73 @@ class HealthOut(BaseModel):
     languages: list[str] = Field(default_factory=list)
     poppler: Optional[str] = None
     note: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Auth (Phase 2): phone OTP login, tokens, profiles, consent
+# ---------------------------------------------------------------------------
+
+
+class OtpRequestIn(BaseModel):
+    phone: str = Field(min_length=7, max_length=20)
+
+
+class OtpRequestOut(BaseModel):
+    message: str
+    expires_in: int
+    #: ONLY present in non-production environments (no SMS provider yet).
+    dev_code: Optional[str] = None
+
+
+class OtpVerifyIn(BaseModel):
+    phone: str = Field(min_length=7, max_length=20)
+    code: str = Field(pattern=r"^[0-9]{6}$")
+    full_name: Optional[str] = Field(default=None, max_length=255)
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class PatientOut(BaseModel):
+    id: int
+    phone: str
+    phone_verified: bool
+    full_name: str
+    preferred_lang: str
+    timezone: str
+    caregiver_name: str = ""
+    caregiver_phone: str = ""
+    created_at: datetime
+
+
+class LoginOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    patient: PatientOut
+
+
+class PatientUpdateIn(BaseModel):
+    full_name: Optional[str] = Field(default=None, max_length=255)
+    preferred_lang: Optional[LangCode] = None
+    timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    caregiver_name: Optional[str] = Field(default=None, max_length=255)
+    caregiver_phone: Optional[str] = Field(default=None, max_length=20)
+
+
+ChannelCode = Literal["whatsapp", "sms", "voice"]
+
+
+class ConsentIn(BaseModel):
+    channel: ChannelCode
+    granted: bool
+
+
+class ConsentOut(BaseModel):
+    channel: str
+    granted: bool
+    #: None when no consent row exists yet (channel never touched)
+    updated_at: Optional[datetime] = None

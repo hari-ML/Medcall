@@ -12,8 +12,9 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from ..models import MedicineItem, Prescription
-from ..schemas import ItemOut, PrescriptionOut
+from ..core.security import signed_image_url
+from ..models import MedicineItem, Patient, Prescription
+from ..schemas import ItemOut, PatientOut, PrescriptionOut
 
 
 def _item_out(item: MedicineItem) -> ItemOut:
@@ -41,7 +42,11 @@ def _item_dict(item: MedicineItem) -> dict[str, Any]:
 
 
 def _prescription_out(prescription: Prescription) -> PrescriptionOut:
-    image_url = f"/uploads/{prescription.image_filename}" if prescription.image_filename else None
+    # Signed, expiring URL (Phase 2): still starts with "/uploads/", so
+    # existing startswith() assertions keep holding, and <img src> works.
+    image_url = (
+        signed_image_url(prescription) if prescription.image_filename else None
+    )
     return PrescriptionOut(
         id=prescription.id,
         image_url=image_url,
@@ -56,6 +61,33 @@ def _get_prescription(db: Session, prescription_id: int) -> Prescription:
     if prescription is None:
         raise HTTPException(status_code=404, detail="Prescription not found.")
     return prescription
+
+
+def _get_owned_prescription(db: Session, prescription_id: int, patient: Patient) -> Prescription:
+    """Ownership-aware lookup (Phase 2 isolation).
+
+    Someone else's prescription (or a legacy orphan row with patient_id NULL)
+    is indistinguishable from a missing one: always a plain 404, never a 403,
+    so record existence does not leak across accounts.
+    """
+    prescription = _get_prescription(db, prescription_id)
+    if prescription.patient_id != patient.id:
+        raise HTTPException(status_code=404, detail="Prescription not found.")
+    return prescription
+
+
+def _patient_out(patient: Patient) -> PatientOut:
+    return PatientOut(
+        id=patient.id,
+        phone=patient.phone,
+        phone_verified=patient.phone_verified,
+        full_name=patient.full_name,
+        preferred_lang=patient.preferred_lang,
+        timezone=patient.timezone,
+        caregiver_name=patient.caregiver_name,
+        caregiver_phone=patient.caregiver_phone,
+        created_at=patient.created_at,
+    )
 
 
 def _get_item(prescription: Prescription, item_id: int) -> MedicineItem:

@@ -2,6 +2,11 @@
 
 The environment must point at a throwaway SQLite database BEFORE any app
 module is imported (conftest.py is collected first by pytest).
+
+Phase 2: the session ``client`` is logged in via phone OTP (the dev mode
+echoes the code) as a fixed primary patient, so every pre-existing test
+reaches the API authenticated. ``other_headers`` gives isolation tests a
+second patient's token.
 """
 
 from __future__ import annotations
@@ -34,11 +39,49 @@ init_db()
 # API client + demo prescription
 # ---------------------------------------------------------------------------
 
+#: fixed test identities (normalised E.164-ish; see core.deps.normalize_phone)
+PRIMARY_PHONE = "+919812300001"
+OTHER_PHONE = "+919812300002"
+
+
+def otp_login(client, phone: str, full_name: str = "") -> str:
+    """Dev-mode phone-OTP login; returns the access token.
+
+    The refresh cookie lands in the client's cookie jar as a side effect.
+    """
+    response = client.post("/api/auth/otp/request", json={"phone": phone})
+    assert response.status_code == 200, response.text
+    code = response.json().get("dev_code")
+    assert code, "dev_code missing — is MEDRECALL_ENV set to production?"
+    payload: dict = {"phone": phone, "code": code}
+    if full_name:
+        payload["full_name"] = full_name
+    response = client.post("/api/auth/otp/verify", json=payload)
+    assert response.status_code == 200, response.text
+    return response.json()["access_token"]
+
 
 @pytest.fixture(scope="session")
 def client():
     with TestClient(app) as test_client:
+        token = otp_login(test_client, PRIMARY_PHONE, "Primary Test Patient")
+        test_client.headers.update({"Authorization": f"Bearer {token}"})
+        # keep the session client token-only: drop the refresh cookie so
+        # /api/auth/refresh in later tests cannot rotate this session
+        test_client.cookies.delete("medrecall_refresh", path="/api/auth")
         yield test_client
+
+
+@pytest.fixture(scope="session")
+def other_patient_token():
+    """A second patient's access token (fresh client, isolated cookie jar)."""
+    with TestClient(app) as probe:
+        return otp_login(probe, OTHER_PHONE, "Other Test Patient")
+
+
+@pytest.fixture()
+def other_headers(other_patient_token):
+    return {"Authorization": f"Bearer {other_patient_token}"}
 
 
 @pytest.fixture()

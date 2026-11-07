@@ -7,10 +7,14 @@
  * Verifies the LIVE backend serves exactly the shapes the five pages consume
  * (SSR cannot exercise useEffect fetch paths).
  *
- * Covers: health, demo, GET prescription, schedule (ta), reminders (hi),
- * PDF (en+ta), uploaded image, real multipart PNG upload through OCR,
- * confirm → schedule/reminders change, edit (incomplete stays unclear),
- * error payloads ({detail}) — i.e. every api.js call the UI makes.
+ * Covers: health, OTP login, demo, GET prescription, schedule (ta),
+ * reminders (hi), PDF (en+ta), uploaded image, real multipart PNG upload
+ * through OCR, confirm → schedule/reminders change, edit (incomplete stays
+ * unclear), error payloads ({detail}) — i.e. every api.js call the UI makes.
+ *
+ * Phase 2: after the health check the script logs in via phone OTP (dev
+ * mode echoes the code) and attaches the Bearer token to every call except
+ * the signed /uploads/ image URL, which is deliberately public.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -28,8 +32,12 @@ function check(cond, label) {
   if (!cond) failures.push(label)
 }
 
+let AUTH_HEADERS = {}
 async function hit(path, opts = {}) {
-  const res = await fetch(BASE + path, opts)
+  const res = await fetch(BASE + path, {
+    ...opts,
+    headers: { ...AUTH_HEADERS, ...(opts.headers || {}) },
+  })
   let body = null
   try {
     body = await res.json()
@@ -72,6 +80,28 @@ console.log('== backend up: /api/health')
   check(status === 200, `health status ${status}`)
   check(['ok', 'degraded'].includes(body?.status), `health.status = ${body?.status}`)
   check(typeof body?.version === 'string' && body.version, 'health.version missing')
+}
+
+// --- A2. OTP login (Phase 2: every record endpoint is patient-scoped) ------
+{
+  const phone = '+9198' + Array.from({ length: 7 }, () => Math.floor(Math.random() * 10)).join('')
+  const req = await jsonBody('/api/auth/otp/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone }),
+  })
+  check(req.status === 200, `otp request -> ${req.status}`)
+  check(/^\d{6}$/.test(req.body?.dev_code || ''), 'otp dev_code missing (dev mode expected)')
+  const ver = await jsonBody('/api/auth/otp/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone, code: req.body?.dev_code }),
+  })
+  check(ver.status === 200 && ver.body?.access_token && ver.body?.patient?.phone === phone,
+    `otp verify -> ${ver.status}`)
+  check((ver.headers.get('set-cookie') || '').includes('medrecall_refresh='),
+    'refresh cookie not set on login')
+  AUTH_HEADERS = { Authorization: 'Bearer ' + ver.body.access_token }
 }
 
 // --- B. demo prescription (Review page payload) ----------------------------
@@ -182,7 +212,7 @@ let schedule = null
 
 // --- F. printable PDFs (en + ta) -------------------------------------------
 for (const lang of ['en', 'ta']) {
-  const res = await fetch(`${BASE}/api/prescriptions/${demo.id}/timetable.pdf?lang=${lang}`)
+  const res = await fetch(`${BASE}/api/prescriptions/${demo.id}/timetable.pdf?lang=${lang}`, { headers: AUTH_HEADERS })
   const bytes = new Uint8Array(await res.arrayBuffer())
   check(res.status === 200, `pdf ${lang} -> ${res.status}`)
   check(res.headers.get('content-type') === 'application/pdf', `pdf ${lang} content-type`)
@@ -203,7 +233,7 @@ for (const lang of ['en', 'ta']) {
     const bytes = await fs.promises.readFile(RX_PATH)
     const form = new FormData()
     form.append('file', new Blob([bytes], { type: 'image/png' }), 'rx.png')
-    const res = await fetch(`${BASE}/api/prescriptions`, { method: 'POST', body: form })
+    const res = await fetch(`${BASE}/api/prescriptions`, { method: 'POST', body: form, headers: AUTH_HEADERS })
     const body = await res.json().catch(() => null)
     check(res.status === 201, `multipart upload -> ${res.status} ${JSON.stringify(body).slice(0, 200)}`)
     check(Array.isArray(body?.items) && body.items.length >= 3,
@@ -274,7 +304,7 @@ for (const lang of ['en', 'ta']) {
   // wrong file type → 415 with a human-readable {detail}
   const form = new FormData()
   form.append('file', new Blob([Buffer.from('hello')], { type: 'text/plain' }), 'notes.txt')
-  const wrongType = await fetch(`${BASE}/api/prescriptions`, { method: 'POST', body: form })
+  const wrongType = await fetch(`${BASE}/api/prescriptions`, { method: 'POST', body: form, headers: AUTH_HEADERS })
   check(wrongType.status === 415, `wrong type -> ${wrongType.status}`)
   const wrongBody = await wrongType.json()
   check(typeof wrongBody?.detail === 'string', '415 detail not a string')

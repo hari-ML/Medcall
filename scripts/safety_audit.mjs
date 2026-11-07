@@ -14,6 +14,10 @@
  * PDF or reminders by abusing the API (status injection in `fields`, bogus
  * actions, extra top-level fields), and verify the demo/upload gates:
  *   blank image → 422, oversize → 413, empty → 400, bad language → 422.
+ *
+ * Phase 2: Part B first logs in via phone OTP (dev mode echoes the code)
+ * and sends the Bearer token on every API call — the audited endpoints are
+ * patient-scoped, so an unauthenticated run would prove nothing.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -173,8 +177,12 @@ check(/weWontGuess/.test(medicineLineSrc), 'MedicineLine must state "we won\'t g
 // ===========================================================================
 // PART B — live adversarial API audit
 // ===========================================================================
+let AUTH_HEADERS = {}
 async function hit(url, opts = {}) {
-  const res = await fetch(BASE + url, opts)
+  const res = await fetch(BASE + url, {
+    ...opts,
+    headers: { ...AUTH_HEADERS, ...(opts.headers || {}) },
+  })
   let body = null
   try {
     body = await res.json()
@@ -210,6 +218,24 @@ if (!ready) {
   process.exit(1)
 }
 
+section('B0. login as a throwaway audit patient (Phase 2 auth)')
+{
+  const phone = '+9198' + Array.from({ length: 7 }, () => Math.floor(Math.random() * 10)).join('')
+  const req = await hit('/api/auth/otp/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone }),
+  })
+  check(req.status === 200 && /^\d{6}$/.test(req.body?.dev_code || ''), `otp request -> ${req.status}`)
+  const ver = await hit('/api/auth/otp/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone, code: req.body?.dev_code }),
+  })
+  check(ver.status === 200 && ver.body?.access_token, `otp verify -> ${ver.status}`)
+  AUTH_HEADERS = { Authorization: 'Bearer ' + (ver.body?.access_token || '') }
+}
+
 section('B1. demo data showcases the gate (3 clear + 1 unclear)')
 const demo = (await hit('/api/demo', { method: 'POST' })).body
 demo.items.forEach((item) => seenStatuses.add(item.status))
@@ -239,7 +265,8 @@ check(baseReminders.every((r) => r.medicine !== 'Cetirizine'), 'UNCLEAR medicine
 check(baseReminders.every((r) => r.medicine !== 'Cough Syrup'), 'SOS medicine must not be reminded')
 
 const pdf0 = Buffer.from(await (await fetch(
-  `${BASE}/api/prescriptions/${demo.id}/timetable.pdf?lang=en`)).arrayBuffer())
+  `${BASE}/api/prescriptions/${demo.id}/timetable.pdf?lang=en`, { headers: AUTH_HEADERS }
+)).arrayBuffer())
 check(pdf0.subarray(0, 5).toString() === '%PDF-', 'baseline PDF invalid')
 
 section('B3. injection: `fields.status = "clear"` must be ignored')
@@ -291,7 +318,8 @@ const afterReminders = (await remindersOf(demo.id)).body
 check(afterReminders.length === 6, `reminders after confirm = ${afterReminders.length} (want 6)`)
 check(afterReminders.some((r) => r.medicine === 'Cetirizine'), 'confirmed medicine missing from reminders')
 const pdf1 = Buffer.from(await (await fetch(
-  `${BASE}/api/prescriptions/${demo.id}/timetable.pdf?lang=en`)).arrayBuffer())
+  `${BASE}/api/prescriptions/${demo.id}/timetable.pdf?lang=en`, { headers: AUTH_HEADERS }
+)).arrayBuffer())
 check(!pdf0.equals(pdf1), 'PDF unchanged after confirmation (exclusion not reflected)')
 
 section('B8. edit via source_text → edited @100, slots derived')
@@ -318,17 +346,17 @@ const blank = Buffer.from(
 )
 const blankForm = new FormData()
 blankForm.append('file', new Blob([blank], { type: 'image/png' }), 'blank.png')
-const blankRes = await fetch(`${BASE}/api/prescriptions`, { method: 'POST', body: blankForm })
+const blankRes = await fetch(`${BASE}/api/prescriptions`, { method: 'POST', body: blankForm, headers: AUTH_HEADERS })
 check(blankRes.status === 422, `blank image -> ${blankRes.status} (want 422, never 201)`)
 
 const bigForm = new FormData()
 bigForm.append('file', new Blob([Buffer.alloc(10 * 1024 * 1024 + 1024)], { type: 'image/png' }), 'big.png')
-const bigRes = await fetch(`${BASE}/api/prescriptions`, { method: 'POST', body: bigForm })
+const bigRes = await fetch(`${BASE}/api/prescriptions`, { method: 'POST', body: bigForm, headers: AUTH_HEADERS })
 check(bigRes.status === 413, `oversize -> ${bigRes.status} (want 413)`)
 
 const emptyForm = new FormData()
 emptyForm.append('file', new Blob([], { type: 'image/png' }), 'empty.png')
-const emptyRes = await fetch(`${BASE}/api/prescriptions`, { method: 'POST', body: emptyForm })
+const emptyRes = await fetch(`${BASE}/api/prescriptions`, { method: 'POST', body: emptyForm, headers: AUTH_HEADERS })
 check(emptyRes.status === 400, `empty file -> ${emptyRes.status} (want 400)`)
 
 section('B11. language gate + status vocabulary')
