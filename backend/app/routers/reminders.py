@@ -57,6 +57,8 @@ def _occurrence_out(row: ReminderOccurrence, patient: Patient) -> OccurrenceOut:
         channel=row.channel,
         body=row.body,
         error=row.error,
+        attempts=row.attempts,
+        next_attempt_at=row.next_attempt_at,
         sent_at=row.sent_at,
     )
 

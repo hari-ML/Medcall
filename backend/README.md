@@ -58,12 +58,13 @@ real database (`MEDRECALL_DB` is overridden to a temp file by `tests/conftest.py
 | `main.py` | app assembly: settings, CORS, middleware, exception handlers, dispatcher lifespan, `init_db()` |
 | `core/` | `config.py` (settings/env/uploads), `logging.py`, `middleware.py` (request-ID), `security.py` (JWT/OTP/signed URLs), `deps.py` (`get_current_patient`) |
 | `routers/` | `auth.py`, `patients.py`, `prescriptions.py`, `reminders.py`, `system.py`, `serializers.py` |
-| `reminders.py` | Phase 3 engine: enrollment, timezone-aware occurrence generation, consent-gated dispatch, background loop + `python -m app.reminders --tick` |
-| `channels/` | `ChannelAdapter` interface, `FakeChannel` (dev), credential-gated WhatsApp/SMS/voice adapters |
+| `reminders.py` | Phase 3 engine: enrollment, timezone-aware occurrence generation, consent-gated dispatch, retry/backoff, background loop + `python -m app.reminders --tick` |
+| `channels/` | `ChannelAdapter` interface, `FakeChannel` (dev), real WhatsApp Cloud API + Twilio SMS/voice adapters (credential-gated; no medical imports) |
 
 Migrations live in `alembic/versions/` — baseline `4fe1831b87e1`, Phase 2
-`c8b4f272dc02`, Phase 3 `c63b9c2fe09c`. Run `alembic upgrade head` from
-`backend/` before starting against an existing database.
+`c8b4f272dc02`, Phase 3 `c63b9c2fe09c`, Phase 4 `a489a7b88ae5`. Run
+`alembic upgrade head` from `backend/` before starting against an existing
+database.
 
 ## Environment variables
 
@@ -79,7 +80,15 @@ Migrations live in `alembic/versions/` — baseline `4fe1831b87e1`, Phase 2
 | `MEDRECALL_REMINDER_HORIZON_HOURS` | how far ahead occurrences are generated | `48` |
 | `MEDRECALL_REMINDER_GRACE_MINUTES` | late-delivery window; older doses become `missed` | `120` |
 | `MEDRECALL_REMINDER_MAX_ATTEMPTS` | failed send attempts before `failed` | `3` |
+| `MEDRECALL_REMINDER_RETRY_BASE_SECONDS` | exponential backoff base for transient provider failures | `60` |
+| `MEDRECALL_REMINDER_RETRY_MAX_SECONDS` | backoff cap | `3600` |
 | `MEDRECALL_CHANNEL_MODE` | `fake` records sends locally (ignored in production) | `fake` |
+| `MEDRECALL_HTTP_TIMEOUT_SECONDS` | outbound provider HTTP timeout | `10` |
+| `MEDRECALL_WHATSAPP_TOKEN` / `MEDRECALL_WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Cloud API credentials | unset |
+| `MEDRECALL_WHATSAPP_TEMPLATE_NAME` / `MEDRECALL_WHATSAPP_TEMPLATE_LANG` | approved template (one body param) for business-initiated messages | unset / `en` |
+| `MEDRECALL_SMS_ACCOUNT_SID` / `MEDRECALL_SMS_AUTH_TOKEN` / `MEDRECALL_SMS_FROM` | Twilio SMS credentials | unset |
+| `MEDRECALL_VOICE_ACCOUNT_SID` / `MEDRECALL_VOICE_AUTH_TOKEN` / `MEDRECALL_VOICE_FROM` | Twilio voice credentials | unset |
+| `MEDRECALL_VOICE_LANG_MAP` | patient language → TwiML `<Say language>` | `en:en-US,ta:ta-IN,hi:hi-IN` |
 
 ## Safety rule (enforced, not just documented)
 
@@ -97,6 +106,10 @@ Migrations live in `alembic/versions/` — baseline `4fe1831b87e1`, Phase 2
    No consent → `blocked`; unconfigured provider → `failed` (never “sent”).
    `tests/test_reminders.py` proves each gate, including edit-to-unclear
    cancelling pending occurrences.
+7. Channel adapters are dumb pipes: they never import the parser/gate/
+   translator/scheduler and send the dispatcher's text unchanged. Transient
+   provider failures retry with exponential backoff; permanent 4xx fail
+   immediately; a 2xx without a provider message id is not retried.
 
 ## Error responses
 

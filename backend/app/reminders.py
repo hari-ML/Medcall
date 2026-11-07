@@ -34,9 +34,15 @@ import logging
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from .channels import REMINDER_CHANNELS, ChannelNotConfigured, adapter_for
+from .channels import (
+    REMINDER_CHANNELS,
+    ChannelDeliveryError,
+    ChannelNotConfigured,
+    adapter_for,
+)
 from .core.config import get_settings
 from .db import SessionLocal
 from .models import (
@@ -152,7 +158,10 @@ def _cancel_pending(db: Session, schedule: ReminderSchedule, reason: str) -> int
             ReminderOccurrence.schedule_id == schedule.id,
             ReminderOccurrence.status == "pending",
         )
-        .update({"status": "cancelled", "error": reason}, synchronize_session=False)
+        .update(
+            {"status": "cancelled", "error": reason, "next_attempt_at": None},
+            synchronize_session=False,
+        )
     )
 
 
@@ -171,7 +180,14 @@ def _cancel_outside_course(db: Session, schedule: ReminderSchedule, patient: Pat
             ReminderOccurrence.status == "pending",
             ReminderOccurrence.scheduled_at >= cutoff_utc,
         )
-        .update({"status": "cancelled", "error": "outside the prescribed course"}, synchronize_session=False)
+        .update(
+            {
+                "status": "cancelled",
+                "error": "outside the prescribed course",
+                "next_attempt_at": None,
+            },
+            synchronize_session=False,
+        )
     )
 
 
@@ -460,6 +476,19 @@ def build_message(schedule: ReminderSchedule, state: dict) -> str:
     return f"MedRecall: {instruction}"
 
 
+def retry_delay_seconds(attempts: int) -> int:
+    """Exponential backoff after the ``attempts``-th transient failure.
+
+    ``base * 2**(attempts-1)`` capped at ``reminder_retry_max_seconds``. The
+    grace window still bounds the whole retry chain — a retry that would fall
+    outside it is marked ``missed`` instead of being sent late.
+    """
+    settings = get_settings()
+    base = max(1, settings.reminder_retry_base_seconds)
+    cap = max(base, settings.reminder_retry_max_seconds)
+    return min(base * (2 ** max(0, attempts - 1)), cap)
+
+
 def dispatch_due(
     db: Session,
     now_utc: datetime | None = None,
@@ -475,6 +504,10 @@ def dispatch_due(
     query = db.query(ReminderOccurrence).filter(
         ReminderOccurrence.status == "pending",
         ReminderOccurrence.scheduled_at <= now,
+        or_(
+            ReminderOccurrence.next_attempt_at.is_(None),
+            ReminderOccurrence.next_attempt_at <= now,
+        ),
     )
     if patient_id is not None:
         query = query.filter(ReminderOccurrence.patient_id == patient_id)
@@ -496,6 +529,7 @@ def dispatch_due(
         ):
             occurrence.status = "cancelled"
             occurrence.error = "reminder schedule is no longer active"
+            occurrence.next_attempt_at = None
             counts["cancelled"] += 1
             continue
 
@@ -504,6 +538,7 @@ def dispatch_due(
         if not is_scheduleable(state) or is_as_needed(state):
             occurrence.status = "cancelled"
             occurrence.error = "item is not scheduleable (safety stop)"
+            occurrence.next_attempt_at = None
             counts["cancelled"] += 1
             continue
 
@@ -511,6 +546,7 @@ def dispatch_due(
         if occurrence.scheduled_at < grace_cutoff:
             occurrence.status = "missed"
             occurrence.error = "past the reminder grace window"
+            occurrence.next_attempt_at = None
             counts["missed"] += 1
             continue
 
@@ -519,6 +555,7 @@ def dispatch_due(
         if channel is None:
             occurrence.status = "blocked"
             occurrence.error = "no consent granted for any reminder channel"
+            occurrence.next_attempt_at = None
             counts["blocked"] += 1
             continue
 
@@ -526,24 +563,50 @@ def dispatch_due(
         if not adapter.configured:
             occurrence.status = "failed"
             occurrence.error = f"{channel} channel is not configured"
+            occurrence.next_attempt_at = None
             counts["failed"] += 1
             continue
 
         try:
             body = build_message(schedule, state)
-            result = adapter.send(patient.phone, body)
+            result = adapter.send(patient.phone, body, lang=schedule.lang or "en")
         except ChannelNotConfigured as exc:
             occurrence.status = "failed"
             occurrence.error = str(exc)
+            occurrence.next_attempt_at = None
             counts["failed"] += 1
             continue
+        except ChannelDeliveryError as exc:
+            occurrence.attempts += 1
+            occurrence.error = str(exc)[:500]
+            if not exc.transient or occurrence.attempts >= settings.reminder_max_attempts:
+                occurrence.status = "failed"
+                occurrence.next_attempt_at = None
+                counts["failed"] += 1
+            else:
+                delay = retry_delay_seconds(occurrence.attempts)
+                occurrence.next_attempt_at = now + timedelta(seconds=delay)
+                logger.info(
+                    "Reminder %s via %s failed (attempt %s/%s), retrying in %ss",
+                    occurrence.id,
+                    channel,
+                    occurrence.attempts,
+                    settings.reminder_max_attempts,
+                    delay,
+                )
+            continue
         except Exception as exc:  # noqa: BLE001 - one bad send must not stop the batch
+            # Unknown failures are treated as transient (conservative) and
+            # bounded by the same attempt limit.
             occurrence.attempts += 1
             occurrence.error = str(exc)[:500]
             if occurrence.attempts >= settings.reminder_max_attempts:
                 occurrence.status = "failed"
+                occurrence.next_attempt_at = None
                 counts["failed"] += 1
-            # else: stays pending for the next tick (attempts < max)
+            else:
+                delay = retry_delay_seconds(occurrence.attempts)
+                occurrence.next_attempt_at = now + timedelta(seconds=delay)
             continue
 
         occurrence.status = "sent"
@@ -551,6 +614,7 @@ def dispatch_due(
         occurrence.body = body
         occurrence.provider_message_id = result.message_id
         occurrence.sent_at = now
+        occurrence.next_attempt_at = None
         occurrence.error = ""
         counts["sent"] += 1
 

@@ -10,7 +10,7 @@ Choosing a channel is NOT done here: the dispatcher requires explicit
 patient consent for the channel first (see ``app.reminders``).
 """
 
-from .base import ChannelAdapter, ChannelNotConfigured, DeliveryResult
+from .base import ChannelAdapter, ChannelDeliveryError, ChannelNotConfigured, DeliveryResult
 from .fake import FakeChannel
 from .registry import adapter_for
 
@@ -19,6 +19,7 @@ REMINDER_CHANNELS: tuple[str, ...] = ("whatsapp", "sms", "voice")
 
 __all__ = [
     "ChannelAdapter",
+    "ChannelDeliveryError",
     "ChannelNotConfigured",
     "DeliveryResult",
     "FakeChannel",

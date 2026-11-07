@@ -73,13 +73,75 @@ class Settings(BaseSettings):
     )
     #: failed delivery attempts before an occurrence is marked failed
     reminder_max_attempts: int = Field(default=3, alias="MEDRECALL_REMINDER_MAX_ATTEMPTS")
+    #: exponential backoff for transient provider failures
+    reminder_retry_base_seconds: int = Field(
+        default=60, alias="MEDRECALL_REMINDER_RETRY_BASE_SECONDS"
+    )
+    reminder_retry_max_seconds: int = Field(
+        default=3600, alias="MEDRECALL_REMINDER_RETRY_MAX_SECONDS"
+    )
     #: "fake" (development default) records sends instead of contacting a
     #: provider; production always uses real adapters (unconfigured -> failed)
     channel_mode: str = Field(default="fake", alias="MEDRECALL_CHANNEL_MODE")
 
+    # --- Delivery providers (Phase 4) --------------------------------------
+    http_timeout_seconds: float = Field(
+        default=10.0, alias="MEDRECALL_HTTP_TIMEOUT_SECONDS"
+    )
+
+    # WhatsApp Cloud API (Meta Graph)
+    whatsapp_token: str = Field(default="", alias="MEDRECALL_WHATSAPP_TOKEN")
+    whatsapp_phone_number_id: str = Field(
+        default="", alias="MEDRECALL_WHATSAPP_PHONE_NUMBER_ID"
+    )
+    whatsapp_api_base: str = Field(
+        default="https://graph.facebook.com", alias="MEDRECALL_WHATSAPP_API_BASE"
+    )
+    whatsapp_api_version: str = Field(
+        default="v21.0", alias="MEDRECALL_WHATSAPP_API_VERSION"
+    )
+    #: approved template name (empty = free-form text; free-form only works
+    #: inside WhatsApp's 24-hour customer-service window)
+    whatsapp_template_name: str = Field(
+        default="", alias="MEDRECALL_WHATSAPP_TEMPLATE_NAME"
+    )
+    #: language code of the approved template (NOT the patient's language)
+    whatsapp_template_lang: str = Field(
+        default="en", alias="MEDRECALL_WHATSAPP_TEMPLATE_LANG"
+    )
+
+    # Twilio SMS
+    sms_account_sid: str = Field(default="", alias="MEDRECALL_SMS_ACCOUNT_SID")
+    sms_auth_token: str = Field(default="", alias="MEDRECALL_SMS_AUTH_TOKEN")
+    sms_from: str = Field(default="", alias="MEDRECALL_SMS_FROM")
+
+    # Twilio voice
+    voice_account_sid: str = Field(default="", alias="MEDRECALL_VOICE_ACCOUNT_SID")
+    voice_auth_token: str = Field(default="", alias="MEDRECALL_VOICE_AUTH_TOKEN")
+    voice_from: str = Field(default="", alias="MEDRECALL_VOICE_FROM")
+    #: patient language -> TwiML <Say language> (provider-dependent TTS)
+    voice_lang_map: str = Field(
+        default="en:en-US,ta:ta-IN,hi:hi-IN", alias="MEDRECALL_VOICE_LANG_MAP"
+    )
+    #: Twilio REST base (overridable for tests/proxies)
+    twilio_api_base: str = Field(
+        default="https://api.twilio.com", alias="MEDRECALL_TWILIO_API_BASE"
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def voice_lang_map_dict(self) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for entry in self.voice_lang_map.split(","):
+            if ":" in entry:
+                key, value = entry.split(":", 1)
+                if key.strip() and value.strip():
+                    mapping[key.strip()] = value.strip()
+        mapping.setdefault("en", "en-US")
+        return mapping
 
     @property
     def is_production(self) -> bool:

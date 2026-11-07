@@ -236,6 +236,9 @@ class OccurrenceOut(BaseModel):
     channel: str
     body: str
     error: str
+    attempts: int = 0
+    #: naive UTC; set only while a transient failure waits for its retry
+    next_attempt_at: Optional[datetime] = None
     sent_at: Optional[datetime] = None
 
 

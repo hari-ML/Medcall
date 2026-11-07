@@ -222,7 +222,11 @@ Item statuses: `clear | unclear | confirmed | edited`.
 SOS/PRN items never get a fixed-time reminder.
 
 Existing databases need the Alembic migrations before the first start:
-`cd backend && alembic upgrade head` (Phase 3 head: `c63b9c2fe09c`).
+`cd backend && alembic upgrade head` (Phase 4 head: `a489a7b88ae5`).
+
+Reminder delivery uses fake channels in development (sends are recorded, not
+sent). To deliver real WhatsApp/Twilio messages, set the provider variables
+from `.env.example`; unconfigured providers never report a reminder as sent.
 
 ---
 
@@ -230,7 +234,7 @@ Existing databases need the Alembic migrations before the first start:
 
 ```bash
 cd backend
-pytest            # 310 tests: parser, gate, translation, safety invariants, auth, reminders, API
+pytest            # 339 tests: parser, gate, translation, safety invariants, auth, reminders, providers, API
 ```
 
 What the suite covers:
@@ -246,7 +250,9 @@ What the suite covers:
 * patient isolation (other patients' records are 404, never 403);
 * the reminder engine: enrollment skips unclear/SOS items, occurrences follow the
   patient's timezone, and nothing is sent without consent or outside the grace
-  window (`tests/test_reminders.py`).
+  window (`tests/test_reminders.py`);
+* provider adapters with mocked HTTP: exact WhatsApp/Twilio payloads, error
+  classification, and retry backoff (`tests/test_channels.py`).
 
 ## Safety audit
 
@@ -255,7 +261,7 @@ limitations — is in **[`SAFETY_AUDIT.md`](SAFETY_AUDIT.md)**. It is reproducib
 
 ```bash
 # with the backend running on :8000, from the repo root
-node scripts/safety_audit.mjs      # 88 checks — static enforcement + live adversarial (incl. reminder engine)
+node scripts/safety_audit.mjs      # 93 checks — static enforcement + live adversarial (incl. reminder engine)
 node scripts/api_contract.mjs      # 216 checks — every payload the five pages consume
 node scripts/frontend_verify.mjs   # 195 checks — bundle, i18n, SSR of all routes
 ```

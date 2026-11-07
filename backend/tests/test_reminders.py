@@ -17,6 +17,7 @@ from sqlalchemy import func
 
 from conftest import otp_login
 
+from app.channels import ChannelAdapter, ChannelDeliveryError, DeliveryResult
 from app.db import SessionLocal
 from app.main import app
 from app.models import (
@@ -718,3 +719,169 @@ def test_run_endpoint_reports_tick_counts(enrolled):
     }
     assert all(isinstance(value, int) for value in payload.values())
     assert payload["generated"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: provider retry/backoff (transient vs permanent failures)
+# ---------------------------------------------------------------------------
+
+
+class _StubAdapter(ChannelAdapter):
+    """Configured adapter whose first ``failures`` sends raise."""
+
+    name = "sms"
+
+    def __init__(self, failures: int, *, transient: bool = True) -> None:
+        self.failures = failures
+        self.transient = transient
+        self.calls = 0
+
+    @property
+    def configured(self) -> bool:
+        return True
+
+    def send(self, to_phone: str, body: str, *, lang: str = "en") -> DeliveryResult:
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise ChannelDeliveryError(
+                f"provider failure #{self.calls}", transient=self.transient
+            )
+        return DeliveryResult(message_id=f"stub-{self.calls}", channel=self.name)
+
+
+def _use_stub(monkeypatch, stub: _StubAdapter) -> None:
+    monkeypatch.setattr("app.reminders.adapter_for", lambda channel: stub)
+
+
+def _pending(db, patient_id: int):
+    return [occ for occ in _occurrences(db, patient_id) if occ.status == "pending"]
+
+
+def _due_pending(db, patient_id: int, now: datetime):
+    """Pending occurrences whose dose time has passed (ignores backoff)."""
+    return [
+        occ
+        for occ in _pending(db, patient_id)
+        if occ.scheduled_at <= now
+    ]
+
+
+def test_transient_failure_waits_for_backoff_then_retries(enrolled, monkeypatch):
+    _set_consent(enrolled, "sms", True)
+    stub = _StubAdapter(failures=1)
+    _use_stub(monkeypatch, stub)
+
+    db = _db()
+    try:
+        start = _start_day(db, enrolled["id"])
+        generate_occurrences(db, _at(start, 15, 25), 48, patient_id=enrolled["id"])
+
+        first = dispatch_due(db, _at(start, 15, 35), patient_id=enrolled["id"])
+        assert first["sent"] == 1  # the other due dose succeeded
+        assert stub.calls == 2
+
+        pending = _due_pending(db, enrolled["id"], _at(start, 15, 35))
+        assert len(pending) == 1
+        occurrence = pending[0]
+        assert occurrence.attempts == 1
+        assert occurrence.next_attempt_at == _at(start, 15, 36)
+        assert "provider failure" in occurrence.error
+
+        # before the backoff deadline: no retry, still pending
+        second = dispatch_due(
+            db,
+            _at(start, 15, 35) + timedelta(seconds=30),
+            patient_id=enrolled["id"],
+        )
+        assert second["sent"] == 0
+        assert stub.calls == 2
+
+        # after the backoff deadline: retried and sent
+        third = dispatch_due(
+            db,
+            _at(start, 15, 36) + timedelta(seconds=1),
+            patient_id=enrolled["id"],
+        )
+        assert third["sent"] == 1
+        assert stub.calls == 3
+
+        db.refresh(occurrence)
+        assert occurrence.status == "sent"
+        assert occurrence.next_attempt_at is None
+        assert occurrence.attempts == 1
+        assert occurrence.provider_message_id == "stub-3"
+    finally:
+        db.close()
+
+
+def test_permanent_failure_fails_immediately_and_is_not_retried(enrolled, monkeypatch):
+    _set_consent(enrolled, "sms", True)
+    stub = _StubAdapter(failures=1, transient=False)
+    _use_stub(monkeypatch, stub)
+
+    db = _db()
+    try:
+        start = _start_day(db, enrolled["id"])
+        generate_occurrences(db, _at(start, 15, 25), 48, patient_id=enrolled["id"])
+
+        first = dispatch_due(db, _at(start, 15, 35), patient_id=enrolled["id"])
+        assert first["failed"] == 1
+        assert first["sent"] == 1
+
+        failed = [occ for occ in _occurrences(db, enrolled["id"]) if occ.status == "failed"]
+        assert len(failed) == 1
+        occurrence = failed[0]
+        assert occurrence.attempts == 1
+        assert occurrence.next_attempt_at is None
+        assert "provider failure" in occurrence.error
+
+        calls_before = stub.calls
+        dispatch_due(db, _at(start, 16, 30), patient_id=enrolled["id"])
+        assert stub.calls == calls_before  # never retried
+    finally:
+        db.close()
+
+
+def test_retries_stop_at_max_attempts(enrolled, monkeypatch):
+    _set_consent(enrolled, "sms", True)
+    stub = _StubAdapter(failures=99)
+    _use_stub(monkeypatch, stub)
+
+    db = _db()
+    try:
+        start = _start_day(db, enrolled["id"])
+        generate_occurrences(db, _at(start, 15, 25), 48, patient_id=enrolled["id"])
+
+        first = dispatch_due(db, _at(start, 15, 35), patient_id=enrolled["id"])
+        assert first["sent"] == 0 and first["failed"] == 0
+        due = _due_pending(db, enrolled["id"], _at(start, 15, 35))
+        assert len(due) == 2
+        assert {occ.attempts for occ in due} == {1}
+
+        second = dispatch_due(
+            db, _at(start, 15, 36) + timedelta(seconds=1), patient_id=enrolled["id"]
+        )
+        assert second["failed"] == 0
+        due = _due_pending(
+            db, enrolled["id"], _at(start, 15, 36) + timedelta(seconds=1)
+        )
+        assert {occ.attempts for occ in due} == {2}
+        assert {occ.next_attempt_at for occ in due} == {
+            _at(start, 15, 38) + timedelta(seconds=1)
+        }
+
+        third = dispatch_due(
+            db, _at(start, 15, 38) + timedelta(seconds=2), patient_id=enrolled["id"]
+        )
+        assert third["failed"] == 2
+        assert (
+            _due_pending(db, enrolled["id"], _at(start, 15, 38) + timedelta(seconds=2))
+            == []
+        )
+        failed = [occ for occ in _occurrences(db, enrolled["id"]) if occ.status == "failed"]
+        assert len(failed) == 2
+        assert {occ.attempts for occ in failed} == {3}
+        assert all(occ.next_attempt_at is None for occ in failed)
+        assert stub.calls == 6
+    finally:
+        db.close()

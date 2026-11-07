@@ -275,5 +275,10 @@ class ReminderOccurrence(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    #: naive UTC; transient failures wait until this time before a retry
+    #: (kept last so ``create_all`` matches the additive migration's order)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, index=True
+    )
 
     schedule: Mapped["ReminderSchedule"] = relationship()

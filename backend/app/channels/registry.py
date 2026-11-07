@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..core.config import get_settings
+from ..core.config import Settings, get_settings
 from .base import ChannelAdapter, ChannelNotConfigured
 from .fake import FakeChannel
 from .sms import SmsAdapter
@@ -16,7 +16,7 @@ _ADAPTERS: dict[str, type[ChannelAdapter]] = {
 }
 
 
-def adapter_for(channel: str) -> ChannelAdapter:
+def adapter_for(channel: str, settings: Settings | None = None) -> ChannelAdapter:
     """The adapter for ``channel``.
 
     * configured real provider -> use it
@@ -29,10 +29,11 @@ def adapter_for(channel: str) -> ChannelAdapter:
     except KeyError:
         raise ValueError(f"Unknown reminder channel: {channel!r}") from None
 
-    real = adapter_class()
+    resolved = settings or get_settings()
+    real = adapter_class(settings=resolved)
     if real.configured:
         return real
-    if get_settings().use_fake_channels:
+    if resolved.use_fake_channels:
         return FakeChannel(channel)
     return real
 

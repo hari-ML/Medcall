@@ -1,13 +1,35 @@
-"""Channel adapter interface."""
+"""Channel adapter interface and provider-error helpers.
+
+Adapters are deliberately *dumb pipes*: they deliver the exact text the
+dispatcher hands them and never import the parser, gate, translator or
+scheduler. All medical content is built from the verified timetable in
+``app.reminders`` — a channel can never invent or alter a dose.
+"""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
+
+import httpx
 
 
 class ChannelNotConfigured(Exception):
     """The provider for this channel has no credentials — nothing is sent."""
+
+
+class ChannelDeliveryError(Exception):
+    """A provider rejected or failed the send.
+
+    ``transient`` drives the dispatcher's retry policy: 429/5xx/timeouts are
+    retried with exponential backoff until the attempt limit, while 4xx
+    errors (bad number, bad template, revoked credentials) fail immediately.
+    """
+
+    def __init__(self, message: str, *, transient: bool) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 @dataclass(frozen=True)
@@ -16,6 +38,69 @@ class DeliveryResult:
 
     message_id: str
     channel: str
+
+
+def is_transient_status(status_code: int) -> bool:
+    """HTTP statuses worth retrying (rate limit / provider-side failures)."""
+    return status_code == 429 or status_code >= 500
+
+
+def provider_error_message(provider: str, response: httpx.Response) -> str:
+    """A short, secret-free error string for the occurrence row.
+
+    Only the provider's own message is included — never request headers,
+    tokens, or the full response body.
+    """
+    detail = ""
+    try:
+        data: Any = response.json()
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, dict):
+            detail = str(error.get("message") or error.get("code") or "")
+        elif error:
+            detail = str(error)
+        if not detail:
+            detail = str(data.get("message") or "")
+    if not detail:
+        detail = (response.text or "").strip()[:200]
+    detail = " ".join(detail.split())[:300]
+    return f"{provider} HTTP {response.status_code}" + (f": {detail}" if detail else "")
+
+
+def post_provider(
+    provider: str,
+    url: str,
+    *,
+    settings: Any,
+    client: httpx.Client | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """POST to a provider, translating transport/HTTP failures into our error.
+
+    A caller-supplied client is used as-is (tests inject an
+    ``httpx.MockTransport``); otherwise a short-lived client with the
+    configured timeout is created so no connection pool leaks.
+    """
+    try:
+        if client is not None:
+            response = client.post(url, **kwargs)
+        else:
+            with httpx.Client(timeout=settings.http_timeout_seconds) as owned:
+                response = owned.post(url, **kwargs)
+    except httpx.HTTPError as exc:
+        raise ChannelDeliveryError(
+            f"{provider} request failed ({type(exc).__name__})", transient=True
+        ) from exc
+
+    if response.status_code >= 400:
+        raise ChannelDeliveryError(
+            provider_error_message(provider, response),
+            transient=is_transient_status(response.status_code),
+        )
+    return response
 
 
 class ChannelAdapter(ABC):
@@ -29,9 +114,10 @@ class ChannelAdapter(ABC):
         """True when this adapter can actually deliver right now."""
 
     @abstractmethod
-    def send(self, to_phone: str, body: str) -> DeliveryResult:
+    def send(self, to_phone: str, body: str, *, lang: str = "en") -> DeliveryResult:
         """Deliver ``body`` to ``to_phone``; raise on failure.
 
+        ``lang`` is used only for provider-side voice/template selection.
         Implementations must never invent or modify the message content —
         the dispatcher builds it from the verified timetable.
         """

@@ -14,6 +14,8 @@ pydantic>=2.7
 pydantic-settings>=2.0
 SQLAlchemy>=2.0
 python-multipart>=0.0.9
+# Outbound provider calls (WhatsApp/SMS/voice) and the test client.
+httpx>=0.27
 
 # --- Migrations ---------------------------------------------------------
 alembic>=1.13
@@ -34,7 +36,6 @@ reportlab>=4.1
 
 # --- Testing -------------------------------------------------------------
 pytest>=8.2
-httpx>=0.27
 
 # --- Optional OCR fallback -----------------------------------------------
 # EasyOCR is a heavyweight fallback OCR engine (pulls in torch, ~2 GB+).

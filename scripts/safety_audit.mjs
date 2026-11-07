@@ -174,6 +174,30 @@ const medicineLineSrc = read(path.join(SRC, 'components/MedicineLine.jsx'))
 check(/item\.status === 'unclear'/.test(medicineLineSrc), 'MedicineLine unclear branch missing')
 check(/weWontGuess/.test(medicineLineSrc), 'MedicineLine must state "we won\'t guess"')
 
+section('A11. delivery channels are dumb pipes + retries are bounded')
+const channelFiles = walk(path.join(APP, 'channels')).filter((f) => f.endsWith('.py'))
+const medicalImports = []
+for (const file of channelFiles) {
+  const text = read(file)
+  if (/(?:from|import)\s+\.{0,2}(?:parser|translate|schedule|seed|uncertainty)\b/.test(text)) {
+    medicalImports.push(path.basename(file))
+  }
+}
+check(medicalImports.length === 0,
+  `channel imports the medical pipeline: ${medicalImports.join(', ')}`)
+const configSrc = read(path.join(APP, 'core/config.py'))
+check(/use_fake_channels[\s\S]{0,200}not self\.is_production/.test(configSrc),
+  'fake channels must be impossible in production')
+const remindersSrc = read(path.join(APP, 'reminders.py'))
+check(/next_attempt_at/.test(remindersSrc) && /ChannelDeliveryError/.test(remindersSrc),
+  'dispatcher must back off transient provider failures')
+const providerAdapters = ['whatsapp.py', 'sms.py', 'voice.py']
+  .filter((name) => /post_provider\(/.test(read(path.join(APP, 'channels', name))))
+check(providerAdapters.length === 3,
+  `real adapters not using the shared HTTP layer: ${providerAdapters.join(',')}`)
+check(/adapter\.send\(patient\.phone, body, lang=/.test(remindersSrc),
+  'dispatcher must pass the verified body + language to the adapter')
+
 // ===========================================================================
 // PART B — live adversarial API audit
 // ===========================================================================
