@@ -1,7 +1,8 @@
 # MedRecall — Backend
 
 FastAPI service that turns prescription images/PDFs into structured, safety-gated
-medicine lines, multilingual schedules, reminders and printable PDFs.
+medicine lines, multilingual schedules, reminders, printable PDFs and a
+read-only, grounded care agent.
 
 **MedRecall explains. It never prescribes. Always confirm with your doctor or pharmacist.**
 
@@ -57,9 +58,10 @@ real database (`MEDRECALL_DB` is overridden to a temp file by `tests/conftest.py
 | `seed.py` | `DEMO_TEXT`, shared prescription builder, CLI seeder |
 | `main.py` | app assembly: settings, CORS, middleware, exception handlers, dispatcher lifespan, `init_db()` |
 | `core/` | `config.py` (settings/env/uploads), `logging.py`, `middleware.py` (request-ID), `security.py` (JWT/OTP/signed URLs), `deps.py` (`get_current_patient`) |
-| `routers/` | `auth.py`, `patients.py`, `prescriptions.py`, `reminders.py`, `system.py`, `serializers.py` |
+| `routers/` | `auth.py`, `patients.py`, `prescriptions.py`, `reminders.py`, `agent.py`, `system.py`, `serializers.py` |
 | `reminders.py` | Phase 3 engine: enrollment, timezone-aware occurrence generation, consent-gated dispatch, retry/backoff, background loop + `python -m app.reminders --tick` |
 | `channels/` | `ChannelAdapter` interface, `FakeChannel` (dev), real WhatsApp Cloud API + Twilio SMS/voice adapters (credential-gated; no medical imports) |
+| `agent/` | Phase 5 read-only care agent: `context.py` (verified, patient-scoped data via `build_schedule`), `intents.py` (en/ta/hi), `responder.py` (deterministic answers), `llm.py` (optional OpenAI-compatible rephrasing + `is_safe_answer` guard), `service.py` (orchestration) |
 
 Migrations live in `alembic/versions/` — baseline `4fe1831b87e1`, Phase 2
 `c8b4f272dc02`, Phase 3 `c63b9c2fe09c`, Phase 4 `a489a7b88ae5`. Run
@@ -89,6 +91,10 @@ database.
 | `MEDRECALL_SMS_ACCOUNT_SID` / `MEDRECALL_SMS_AUTH_TOKEN` / `MEDRECALL_SMS_FROM` | Twilio SMS credentials | unset |
 | `MEDRECALL_VOICE_ACCOUNT_SID` / `MEDRECALL_VOICE_AUTH_TOKEN` / `MEDRECALL_VOICE_FROM` | Twilio voice credentials | unset |
 | `MEDRECALL_VOICE_LANG_MAP` | patient language → TwiML `<Say language>` | `en:en-US,ta:ta-IN,hi:hi-IN` |
+| `MEDRECALL_AGENT_LLM_PROVIDER` | `none` (deterministic only) \| `openai` (any OpenAI-compatible endpoint) | `none` |
+| `MEDRECALL_AGENT_LLM_API_KEY` / `MEDRECALL_AGENT_LLM_MODEL` | LLM credentials/model; both required for the fallback to run | unset |
+| `MEDRECALL_AGENT_LLM_BASE_URL` | OpenAI-compatible base URL | `https://api.openai.com/v1` |
+| `MEDRECALL_AGENT_LLM_TIMEOUT_SECONDS` / `MEDRECALL_AGENT_LLM_MAX_TOKENS` | LLM request timeout / answer cap | `15` / `300` |
 
 ## Safety rule (enforced, not just documented)
 
@@ -110,6 +116,13 @@ database.
    translator/scheduler and send the dispatcher's text unchanged. Transient
    provider failures retry with exponential backoff; permanent 4xx fail
    immediately; a 2xx without a provider message id is not retried.
+8. The care agent (`agent/`) is read-only and imports no parser/OCR/seed/PDF
+   code. It reuses `build_schedule`/`is_scheduleable`, never copies
+   `source_text` or an unclear item's dose/time into context or a prompt,
+   refuses dose changes/interactions/diagnosis, and only names unclear or
+   as-needed items. The optional LLM receives verified context only; any
+   answer with an unverified number, unit or time is rejected and the
+   deterministic fallback is returned (`tests/test_agent.py`, audit A12/B13).
 
 ## Error responses
 
@@ -123,5 +136,5 @@ All errors are plain JSON: `{"detail": "…"}`
 | 404 | unknown prescription/item — also someone else's record (no existence leak) |
 | 413 | upload > 10 MB |
 | 415 | not JPG/PNG/PDF |
-| 422 | OCR failure, no medicine lines found, invalid `lang`/timezone |
+| 422 | OCR failure, no medicine lines found, invalid `lang`/timezone, blank agent message |
 | 429 | too many OTP requests for one phone |

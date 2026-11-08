@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 LangCode = Literal["en", "ta", "hi"]
 
@@ -249,3 +249,45 @@ class ReminderRunOut(BaseModel):
     failed: int
     missed: int
     cancelled: int
+
+
+# ---------------------------------------------------------------------------
+# AI care agent (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+class AgentChatIn(BaseModel):
+    message: str = Field(min_length=1, max_length=500)
+    #: answer language; omitted -> the patient's preferred language
+    lang: Optional[LangCode] = None
+
+    @field_validator("message")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("message must not be blank")
+        return text
+
+
+class AgentSourceOut(BaseModel):
+    prescription_id: int
+    item_id: Optional[int] = None
+    medicine: str
+    status: str
+
+
+class AgentChatOut(BaseModel):
+    reply: str
+    lang: str
+    intent: str
+    grounded: bool
+    escalate: bool
+    safety_blocked: bool
+    disclaimer: str
+    sources: list[AgentSourceOut] = Field(default_factory=list)
+
+
+class AgentSuggestionsOut(BaseModel):
+    lang: str
+    suggestions: list[str]

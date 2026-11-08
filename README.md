@@ -24,7 +24,8 @@ Upload photo/PDF → OCR (Tesseract eng+tam+hin) → line extraction
                  → UNCERTAINTY GATE (never guesses)
                  → human confirmation / edit for unclear lines
                  → translation (en / ta / hi) → 4-slot timetable
-                 → browser reminders + printable PDF
+                 → reminders + printable PDF
+                 → read-only care agent (grounded answers, no prescribing)
 ```
 
 | Slot | Default time | Frequency examples |
@@ -50,7 +51,10 @@ Upload photo/PDF → OCR (Tesseract eng+tam+hin) → line extraction
 medrecall/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py          FastAPI app, endpoints, CORS, uploads, demo mode
+│   │   ├── main.py          FastAPI assembly (routers, CORS, lifespan)
+│   │   ├── core/            settings, logging, request-ID, auth/security, deps
+│   │   ├── routers/         auth, patients, prescriptions, reminders, agent, system
+│   │   ├── agent/           grounded care agent: context, intents, responder, llm
 │   │   ├── ocr.py           image/PDF → text lines + confidence (Tesseract)
 │   │   ├── extract.py       OCR lines → candidate medicine lines
 │   │   ├── parser.py        dose / frequency / food / duration parsing
@@ -61,7 +65,7 @@ medrecall/
 │   │   ├── models.py db.py schemas.py   database + API schemas
 │   │   └── seed.py          demo data + CLI seeder
 │   ├── fonts/               NotoSansTamil / NotoSansDevanagari (see fonts/README.md)
-│   ├── tests/               pytest suite (257 tests)
+│   ├── tests/               pytest suite (375 tests)
 │   ├── uploads/             uploaded images (runtime)
 │   ├── requirements.txt  pytest.ini
 ├── frontend/                React + Vite + Tailwind app
@@ -214,6 +218,8 @@ code). Prescriptions are scoped to the caller — someone else's id is a 404.
 | `GET` | `/api/reminders/upcoming?days=` | pending occurrences (patient-local times) |
 | `POST` | `/api/reminders/run` | one manual generate + dispatch tick |
 | `GET` | `/api/reminders/history` | sent / blocked / failed / missed occurrences |
+| `POST` | `/api/agent/chat` | grounded answer from the caller's own verified data |
+| `GET` | `/api/agent/suggestions?lang=` | localized starter questions |
 | `POST` | `/api/demo` | prefilled prescription (3 clear + 1 unclear) |
 | `GET` | `/api/health` | Tesseract + language availability |
 
@@ -228,13 +234,21 @@ Reminder delivery uses fake channels in development (sends are recorded, not
 sent). To deliver real WhatsApp/Twilio messages, set the provider variables
 from `.env.example`; unconfigured providers never report a reminder as sent.
 
+The **care agent** (`POST /api/agent/chat`) is read-only and answers only from
+the same verified timetable as the UI/PDF: it never diagnoses, changes a dose,
+checks interactions, or invents a time. Unclear items are named but never given
+a dose or time; SOS/PRN items are described as having no fixed time. It is
+deterministic by default; an optional OpenAI-compatible LLM may rephrase only
+unmatched questions, and any answer containing an unverified number, unit or
+time is rejected (`MEDRECALL_AGENT_LLM_*` in `.env.example`).
+
 ---
 
 ## Tests
 
 ```bash
 cd backend
-pytest            # 339 tests: parser, gate, translation, safety invariants, auth, reminders, providers, API
+pytest            # 375 tests: parser, gate, translation, safety invariants, auth, reminders, providers, agent, API
 ```
 
 What the suite covers:
@@ -252,7 +266,10 @@ What the suite covers:
   patient's timezone, and nothing is sent without consent or outside the grace
   window (`tests/test_reminders.py`);
 * provider adapters with mocked HTTP: exact WhatsApp/Twilio payloads, error
-  classification, and retry backoff (`tests/test_channels.py`).
+  classification, and retry backoff (`tests/test_channels.py`);
+* the care agent: verified-only answers, no dose/time for unclear or SOS items,
+  dose-change/diagnosis/interaction refusals, Tamil/Hindi replies, patient
+  isolation, and the LLM numeric/time safety filter (`tests/test_agent.py`).
 
 ## Safety audit
 
@@ -261,12 +278,12 @@ limitations — is in **[`SAFETY_AUDIT.md`](SAFETY_AUDIT.md)**. It is reproducib
 
 ```bash
 # with the backend running on :8000, from the repo root
-node scripts/safety_audit.mjs      # 93 checks — static enforcement + live adversarial (incl. reminder engine)
+node scripts/safety_audit.mjs      # 124 checks — static enforcement + live adversarial (incl. agent + reminders)
 node scripts/api_contract.mjs      # 216 checks — every payload the five pages consume
 node scripts/frontend_verify.mjs   # 195 checks — bundle, i18n, SSR of all routes
 ```
 
-Last run: **75 / 212 / 195 checks, 0 failures**, plus **257 backend tests passing**.
+Last run: pytest **375 passed**; audits **124 / 216 / 195 checks, 0 failures**.
 The live audit tries to inject `status:"clear"` through five different PATCH
 payloads, uploads blank/oversize/empty files, and confirms the unclear demo line
 stays out of the schedule, PDF and reminders until it is confirmed — and appears

@@ -1,4 +1,4 @@
-"""MedRecall FastAPI application — assembly only (Phase 1, Phase 2).
+"""MedRecall FastAPI application — assembly only (Phase 1, Phase 2, Phase 5).
 
 Endpoints
 ---------
@@ -22,14 +22,16 @@ DELETE /api/prescriptions/{id}/reminders/enroll    stop reminders (history kept)
 GET    /api/reminders/upcoming                     next occurrences (patient-local times)
 POST   /api/reminders/run                          one manual generate+dispatch tick
 GET    /api/reminders/history                      sent / blocked / missed occurrences
+POST   /api/agent/chat                             grounded answer about own verified data
+GET    /api/agent/suggestions                      localized starter questions
 GET    /api/health                               OCR availability check
 POST   /api/demo                                 prefilled prescription (no OCR)
 GET    /uploads/{filename}?exp=..&sig=..         signed, expiring image URL (15 min)
 
 Route handlers live in ``app/routers/`` (``auth.py``, ``patients.py``,
-``prescriptions.py``, ``reminders.py``, ``system.py``); this module wires the
-app together: settings, logging, CORS, request-ID middleware, exception
-handlers, the reminder dispatcher lifespan and ``init_db()``.
+``prescriptions.py``, ``reminders.py``, ``agent.py``, ``system.py``); this
+module wires the app together: settings, logging, CORS, request-ID middleware,
+exception handlers, the reminder dispatcher lifespan and ``init_db()``.
 
 Auth (Phase 2): every /api/* route except /api/health and the /api/auth
 login routes requires a Bearer access token; prescriptions are scoped to
@@ -63,7 +65,7 @@ from .core.middleware import RequestContextMiddleware
 from .db import init_db
 from .ocr import OcrError
 from .reminders import dispatcher_loop
-from .routers import auth, patients, prescriptions, reminders, system
+from .routers import agent, auth, patients, prescriptions, reminders, system
 from .translate import TranslationError, UnsupportedLanguageError
 
 # ---------------------------------------------------------------------------
@@ -140,4 +142,5 @@ app.include_router(auth.router)
 app.include_router(patients.router)
 app.include_router(prescriptions.router)
 app.include_router(reminders.router)
+app.include_router(agent.router)
 app.include_router(system.router)

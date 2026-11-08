@@ -198,6 +198,52 @@ check(providerAdapters.length === 3,
 check(/adapter\.send\(patient\.phone, body, lang=/.test(remindersSrc),
   'dispatcher must pass the verified body + language to the adapter')
 
+section('A12. AI care agent is read-only, grounded and cannot prescribe')
+const agentDir = path.join(APP, 'agent')
+const agentFiles = ['types.py', 'context.py', 'intents.py', 'responder.py', 'llm.py',
+  'service.py', '__init__.py'].map((name) => path.join(agentDir, name))
+check(agentFiles.every((file) => fs.existsSync(file)),
+  `agent package incomplete: ${agentFiles.filter((f) => !fs.existsSync(f)).map((f) => path.basename(f)).join(',')}`)
+const forbiddenAgentImports = []
+for (const file of agentFiles) {
+  const text = read(file)
+  if (/(?:from|import)\s+\.{0,2}(?:parser|ocr|seed|pdf|extract)\b/.test(text)) {
+    forbiddenAgentImports.push(path.basename(file))
+  }
+}
+check(forbiddenAgentImports.length === 0,
+  `agent imports the medical pipeline: ${forbiddenAgentImports.join(', ')}`)
+const agentContextSrc = read(path.join(agentDir, 'context.py'))
+check(/build_schedule\(/.test(agentContextSrc) && /is_scheduleable\(/.test(agentContextSrc),
+  'agent must reuse build_schedule + is_scheduleable')
+check(/entry\.pop\("source_text", None\)/.test(agentContextSrc),
+  'agent context must strip excluded source_text')
+const agentResponderSrc = read(path.join(agentDir, 'responder.py'))
+check(!/source_text/.test(agentResponderSrc), 'responder must never read source_text')
+const agentLlmSrc = read(path.join(agentDir, 'llm.py'))
+check(/def is_safe_answer/.test(agentLlmSrc), 'LLM output must pass is_safe_answer')
+check(/Never prescribe, diagnose/.test(agentLlmSrc) && /Never state a dose/.test(agentLlmSrc),
+  'LLM system prompt must forbid prescribing/diagnosis/invented doses')
+const agentServiceSrc = read(path.join(agentDir, 'service.py'))
+check(!/(?:db\.add|db\.commit|db\.delete)\(/.test(agentServiceSrc + agentContextSrc + agentResponderSrc),
+  'agent layer must be read-only')
+const agentIntentsSrc = read(path.join(agentDir, 'intents.py'))
+check(/அவசரம்/.test(agentIntentsSrc) && /आपातकाल/.test(agentIntentsSrc),
+  'agent safety intents must cover Tamil + Hindi')
+const agentRouterSrc = read(path.join(APP, 'routers/agent.py'))
+check((agentRouterSrc.match(/get_current_patient/g) || []).length >= 2,
+  'agent routes must require authentication')
+check(/@router\.post\("\/api\/agent\/chat"/.test(agentRouterSrc) &&
+  /@router\.get\("\/api\/agent\/suggestions"/.test(agentRouterSrc),
+  'agent routes missing')
+check(/include_router\(agent\.router\)/.test(read(path.join(APP, 'main.py'))),
+  'agent router not wired in main.py')
+const agentSchemasSrc = read(path.join(APP, 'schemas.py'))
+check(/class AgentChatIn/.test(agentSchemasSrc) && /class AgentChatOut/.test(agentSchemasSrc),
+  'agent schemas missing')
+check(/agent_llm_provider: str = Field\(default="none"/.test(configSrc),
+  'LLM must be off by default')
+
 // ===========================================================================
 // PART B — live adversarial API audit
 // ===========================================================================
@@ -444,6 +490,88 @@ section('B12. reminder engine: enroll/send only from the verified timetable')
 
   // leave no reminders running for the throwaway audit patient
   await hit(`/api/prescriptions/${demo3.id}/reminders/enroll`, { method: 'DELETE' })
+}
+
+section('B13. AI care agent answers only from the verified timetable')
+{
+  const agentChat = (message, lang) =>
+    hit('/api/agent/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(lang ? { message, lang } : { message }),
+    })
+
+  const anonymous = await fetch(`${BASE}/api/agent/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'What medicines do I take?' }),
+  })
+  check(anonymous.status === 401, `unauthenticated agent chat -> ${anonymous.status}`)
+
+  // A fresh patient guarantees the agent sees exactly one demo prescription
+  // (the audit patient above accumulates confirmed/edited prescriptions).
+  const phone13 = '+9198' + Array.from({ length: 7 }, () => Math.floor(Math.random() * 10)).join('')
+  const req13 = await hit('/api/auth/otp/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone: phone13 }),
+  })
+  const verify13 = await hit('/api/auth/otp/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone: phone13, code: req13.body?.dev_code }),
+  })
+  check(verify13.status === 200 && verify13.body?.access_token, `agent login -> ${verify13.status}`)
+  AUTH_HEADERS = { Authorization: 'Bearer ' + (verify13.body?.access_token || '') }
+
+  const demo13 = (await hit('/api/demo', { method: 'POST' })).body
+
+  const list = await agentChat('What medicines do I take?')
+  const listReply = list.body?.reply || ''
+  check(list.status === 200 && list.body?.intent === 'list_medicines', `agent list -> ${list.status}/${list.body?.intent}`)
+  check(listReply.includes('Paracetamol') && listReply.includes('Amoxicillin'),
+    'agent list missing verified medicines')
+  check(!listReply.includes('??'), 'agent echoed unverified source text')
+  const cetirizineLine = listReply.split('\n').find((line) => line.includes('Cetirizine')) || ''
+  check(Boolean(cetirizineLine) && !cetirizineLine.includes('21:00') && !/\bmg\b/.test(cetirizineLine),
+    'agent gave a dose/time for an unclear item')
+
+  const unclearAsk = await agentChat('When should I take Cetirizine?')
+  check(unclearAsk.status === 200 && !/21:00|\bmg\b|0-0-1/.test(unclearAsk.body?.reply || ''),
+    'agent invented a time/dose for an unclear item')
+
+  const dose = await agentChat('Can I double my dose?')
+  check(dose.body?.intent === 'dose_change' && dose.body?.safety_blocked === true,
+    'dose-change question was not refused')
+  check(!/1000\s*mg/.test(dose.body?.reply || ''), 'agent suggested an unverified dose')
+
+  const missed = await agentChat('I missed my Paracetamol dose')
+  check(/Do not take a double dose/.test(missed.body?.reply || ''),
+    'missed-dose answer must warn against doubling')
+
+  const timetable = await agentChat('What is my timetable today?')
+  const timetableReply = timetable.body?.reply || ''
+  check(['08:00', '13:00', '21:00'].every((time) => timetableReply.includes(time)),
+    'agent timetable missing verified slot times')
+  check(!timetableReply.includes('Cetirizine') && !timetableReply.includes('Cough Syrup'),
+    'agent timetable contains an unclear/as-needed item')
+
+  const tamil = await agentChat('என் மருந்துகள் என்ன?', 'ta')
+  check(tamil.body?.lang === 'ta' && /[\u0B80-\u0BFF]/.test(tamil.body?.reply || ''),
+    'agent Tamil answer missing Tamil text')
+
+  const suggestions = await hit('/api/agent/suggestions?lang=hi')
+  const hindiSuggestions = suggestions.body?.suggestions || []
+  check(suggestions.status === 200 && hindiSuggestions.length >= 4,
+    `agent suggestions -> ${suggestions.status}/${hindiSuggestions.length}`)
+  check(hindiSuggestions.every((question) => /[\u0900-\u097F]/.test(question)),
+    'agent suggestions not localized')
+
+  const sources = list.body?.sources || []
+  check(sources.length > 0 && sources.every((source) => source.prescription_id === demo13.id),
+    'agent sources leak another prescription')
+  check(sources.every((source) => ['clear', 'confirmed', 'edited', 'unclear'].includes(source.status)),
+    'agent source has an unknown status')
 }
 
 // ===========================================================================

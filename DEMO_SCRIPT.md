@@ -69,8 +69,10 @@ with your doctor or pharmacist."*
 - Click **✓ Mark as taken** on the morning dose (this feeds the Home progress bar).
 - Click **🖨 Print timetable** → the Tamil PDF opens in the second tab. Flash the
   four slots + the disclaimer footer. Close the tab.
-- Optional one-liner while clicking **🔔 Enable reminders**: *"Reminders fire while
-  the tab is open — browser notifications, no fake push server in the MVP."*
+- Optional one-liner while clicking **🔔 Enable reminders**: *"The backend reminder
+  engine only schedules verified fixed-time items — unclear and SOS never get a
+  reminder. Sending is consent-gated: fake channels in dev, real WhatsApp/Twilio
+  once credentials are set."*
 
 ### 1:50 – 2:00 · Close
 - Click **← Back** / Home: the progress bar shows today's doses (e.g. *1 of 5*).
@@ -106,9 +108,15 @@ with your doctor or pharmacist."*
   `Translator` interface; the MVP ships a deterministic phrase-table translator
   so medical wording can't drift. Swap in a medical model later without
   touching the safety gate.
+- **"Can it answer questions?"** → Yes: `POST /api/agent/chat` is a read-only,
+  grounded care agent in English/Tamil/Hindi. It answers only from the verified
+  timetable, never gives a dose or time for an unclear item, and refuses dose
+  changes, interactions and diagnosis. An optional LLM may rephrase unmatched
+  questions, but any unverified number/unit/time is rejected.
 - **"What's real vs mocked?"** → Real Tesseract OCR (eng+tam+hin), real FastAPI +
-  SQLite, real ReportLab PDFs with Noto fonts, real browser notifications.
-  Only push notifications off-tab are out of scope.
+  SQLite, real ReportLab PDFs with Noto fonts, real phone-OTP auth and reminder
+  engine. Delivery providers use fake channels by default; real WhatsApp/Twilio
+  adapters are credential-gated and never report an unconfigured send as "sent".
 
 ## Reset between run-throughs
 

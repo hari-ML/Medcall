@@ -6,7 +6,7 @@ MedRecall — turns a prescription photo/PDF into a verified, trilingual (en/ta/
 
 - `backend/` — FastAPI + SQLAlchemy/SQLite. Entrypoint `app/main.py` (assembly only). Run every backend command from `backend/`.
   Pipeline: `ocr.py → extract.py → parser.py → uncertainty.py (the gate) → translate.py → schedule.py / pdf.py`.
-  Structure (Phase 1/2/3/4): `app/main.py` wires routers + the dispatcher lifespan; `app/core/` holds `config.py` (settings, env, upload dir), `logging.py`, `middleware.py` (request-ID), `security.py` (JWT/OTP/signed image URLs), `deps.py` (phone normalisation, `get_current_patient`); `app/routers/` holds `auth.py`, `patients.py`, `prescriptions.py`, `reminders.py`, `system.py`, `serializers.py`; `app/reminders.py` is the reminder engine and `app/channels/` the delivery adapters (fake in dev; real WhatsApp/Twilio in Phase 4). Migrations in `alembic/` (baseline `4fe1831b87e1`, Phase 2 `c8b4f272dc02`, Phase 3 `c63b9c2fe09c`, Phase 4 `a489a7b88ae5`).
+  Structure (Phase 1/2/3/4/5): `app/main.py` wires routers + the dispatcher lifespan; `app/core/` holds `config.py` (settings, env, upload dir), `logging.py`, `middleware.py` (request-ID), `security.py` (JWT/OTP/signed image URLs), `deps.py` (phone normalisation, `get_current_patient`); `app/routers/` holds `auth.py`, `patients.py`, `prescriptions.py`, `reminders.py`, `agent.py`, `system.py`, `serializers.py`; `app/agent/` is the read-only care agent (`context.py` verified data via `build_schedule`, `intents.py`, `responder.py`, `llm.py`, `service.py`); `app/reminders.py` is the reminder engine and `app/channels/` the delivery adapters (fake in dev; real WhatsApp/Twilio in Phase 4). Migrations in `alembic/` (baseline `4fe1831b87e1`, Phase 2 `c8b4f272dc02`, Phase 3 `c63b9c2fe09c`, Phase 4 `a489a7b88ae5`).
 - `frontend/` — React 18 + Vite SPA. 5 routed pages in `src/pages/`, every API call in `src/api.js`, every UI string in `src/i18n.jsx`.
 - `scripts/` — three Node verification scripts, run from the **repo root** (Node 18+; they use global `fetch`).
 - `sample_data/` — text fixtures + `rx.png` (the PNG is required by `scripts/api_contract.mjs`).
@@ -33,6 +33,7 @@ npm run dev                              # :5173, proxies /api and /uploads to :
 - Env vars: `MEDRECALL_DB` (SQLite path/URL, used by tests), `POPPLER_PATH`, `MEDRECALL_API` (audit-script base URL, default `http://127.0.0.1:8000`), `MEDRECALL_ENV` (`development` default | `production` — production refuses dev-mode OTP echoes with 503 and makes the refresh cookie `Secure`), `MEDRECALL_SECRET_KEY` (JWT/OTP HMAC secret — set a real one in production).
 - Reminder env vars (Phase 3/4): `MEDRECALL_REMINDER_DISPATCHER` (default on; `tests/conftest.py` turns it off), `MEDRECALL_REMINDER_INTERVAL_SECONDS` (30), `MEDRECALL_REMINDER_HORIZON_HOURS` (48), `MEDRECALL_REMINDER_GRACE_MINUTES` (120), `MEDRECALL_REMINDER_MAX_ATTEMPTS` (3), `MEDRECALL_REMINDER_RETRY_BASE_SECONDS` (60), `MEDRECALL_REMINDER_RETRY_MAX_SECONDS` (3600), `MEDRECALL_CHANNEL_MODE` (`fake` in development; production ignores `fake` and uses the real adapters).
 - Provider env vars (Phase 4): `MEDRECALL_HTTP_TIMEOUT_SECONDS` (10); WhatsApp `MEDRECALL_WHATSAPP_TOKEN`, `MEDRECALL_WHATSAPP_PHONE_NUMBER_ID`, `MEDRECALL_WHATSAPP_API_VERSION` (`v21.0`), optional `MEDRECALL_WHATSAPP_TEMPLATE_NAME`/`MEDRECALL_WHATSAPP_TEMPLATE_LANG`; Twilio SMS `MEDRECALL_SMS_ACCOUNT_SID`/`MEDRECALL_SMS_AUTH_TOKEN`/`MEDRECALL_SMS_FROM`; Twilio voice `MEDRECALL_VOICE_ACCOUNT_SID`/`MEDRECALL_VOICE_AUTH_TOKEN`/`MEDRECALL_VOICE_FROM` and `MEDRECALL_VOICE_LANG_MAP`. Unconfigured providers never report "sent".
+- Agent env vars (Phase 5): `MEDRECALL_AGENT_LLM_PROVIDER` (`none` default | `openai` for any OpenAI-compatible endpoint), `MEDRECALL_AGENT_LLM_API_KEY`, `MEDRECALL_AGENT_LLM_MODEL`, `MEDRECALL_AGENT_LLM_BASE_URL` (`https://api.openai.com/v1`), `MEDRECALL_AGENT_LLM_TIMEOUT_SECONDS` (15), `MEDRECALL_AGENT_LLM_MAX_TOKENS` (300). With `none` (or missing key/model) the agent is fully deterministic and makes no external calls.
 
 ## Auth (Phase 2)
 
@@ -72,14 +73,14 @@ Adapters are **dumb pipes**: they deliver the dispatcher's exact text and never 
 
 ```bash
 # 1. backend tests — from backend/
-pytest                                   # 339 tests, ~27s; addopts=-q, testpaths=tests
+pytest                                   # 375 tests, ~30s; addopts=-q, testpaths=tests
 pytest tests/test_api.py::test_health    # single test (file::node form)
 
 # 2. frontend static check — from repo root, needs `npm install` in frontend/ (esbuild)
 node scripts/frontend_verify.mjs         # 195 checks, no backend needed
 
 # 3. live audits — backend must be running
-node scripts/safety_audit.mjs            # 93 checks (part A static, part B live incl. B0 login, B12 reminder engine)
+node scripts/safety_audit.mjs            # 124 checks (part A static, part B live incl. B0 login, B12 reminder engine, B13 agent)
 node scripts/api_contract.mjs            # 216 checks, uploads sample_data/rx.png through real OCR
 
 # 4. production build — from frontend/
@@ -92,7 +93,7 @@ Known failures on this machine (not regressions):
 
 - **Tesseract + Poppler are installed** (Phase 0: Tesseract 5.4.0 with tam/hin packs, Poppler 25.07.0) — the real-OCR pipeline test and the audit's OCR-upload section pass on this machine. On a bare machine (no Tesseract) `tests/test_api.py::test_upload_real_image_runs_full_ocr_pipeline` fails with 422 and `scripts/api_contract.mjs` crashes (TypeError) in its OCR-upload section; install with `winget install UB-Mannheim.TesseractOCR` (see README for Tamil/Hindi packs) for a fully green run.
 - **`:8000` may already be occupied** by an unrelated app on this machine, which will silently answer `/api/health`. If so, bind uvicorn to another port, set `MEDRECALL_API`, and remember `frontend/vite.config.js` hardcodes the proxy target `http://localhost:8000`.
-- Expected green counts **with Tesseract + Poppler installed and the backend running**: pytest 339 passed, frontend_verify 195/195, safety_audit 93/93, api_contract 216/216. On a bare machine only frontend_verify is fully green.
+- Expected green counts **with Tesseract + Poppler installed and the backend running**: pytest 375 passed, frontend_verify 195/195, safety_audit 124/124, api_contract 216/216. On a bare machine only frontend_verify is fully green.
 
 Tests never touch the real database: `tests/conftest.py` sets `MEDRECALL_DB` to a throwaway temp file *before* the app is imported — don't "clean up" `backend/medrecall.db` as part of testing.
 
@@ -104,6 +105,7 @@ Tests never touch the real database: `tests/conftest.py` sets `MEDRECALL_DB` to 
 - **Patient-data isolation (Phase 2)**: every prescription route goes through `_get_owned_prescription` — other patients' rows and NULL-`patient_id` orphans are indistinguishable from missing (404, never 403, no existence leak); only the caller's rows appear in `GET /api/prescriptions`; uploads and demo stamp `patient_id`. `tests/test_auth.py` proves it.
 - **Reminders (Phase 3)**: enrollment skips unclear/as-needed/no-slot items; the dispatcher re-checks schedule active + `is_scheduleable` + not `is_as_needed` + grace window + explicit channel consent immediately before each send; no consent → `blocked` (terminal), unconfigured provider → `failed` (never “sent”); the body is rebuilt from stored verified fields and `translate.py` raises for unclear items. `tests/test_reminders.py` proves each gate, including edit-to-unclear cancelling pending occurrences.
 - **Delivery (Phase 4)**: channel adapters are dumb pipes — they never import the parser/gate/translator/scheduler and send the dispatcher's text unchanged (audit A11). Transient provider errors retry with exponential backoff (`next_attempt_at`), permanent 4xx fail immediately, and a 2xx without a provider message id is never retried (no duplicate dose). Fake channels are impossible in production (`use_fake_channels`).
+- **Care agent (Phase 5)**: `app/agent/` is read-only (no `db.add/commit/delete`), imports no parser/OCR/seed/PDF code, and answers from the same `build_schedule`/`is_scheduleable` used by the timetable/PDF. Unclear items are only named — never given a dose, frequency or time; SOS/PRN items are described as having no fixed time. It refuses dose changes, interactions and diagnosis, and escalates side effects/emergencies. The optional LLM receives verified context only (no `source_text`, phone, image or unclear-item dose) and its answer is rejected unless every number/unit/time/number-word is present in the verified context (`llm.is_safe_answer`); rejection falls back to the deterministic answer. `tests/test_agent.py` + audit A12/B13 prove it.
 - Never weaken the gate to make OCR/demo output look better — flag-and-require-human-confirmation is the intended behavior.
 
 ## Frontend/i18n gotcha

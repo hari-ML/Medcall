@@ -128,6 +128,24 @@ class Settings(BaseSettings):
         default="https://api.twilio.com", alias="MEDRECALL_TWILIO_API_BASE"
     )
 
+    # --- AI care agent (Phase 5) -------------------------------------------
+    #: "none" (deterministic answers only, default) or "openai" for any
+    #: OpenAI-compatible /chat/completions endpoint. The LLM only rephrases
+    #: unmatched questions from verified context; its output is always
+    #: validated by app.agent.llm.is_safe_answer before it is returned.
+    agent_llm_provider: str = Field(default="none", alias="MEDRECALL_AGENT_LLM_PROVIDER")
+    agent_llm_api_key: str = Field(default="", alias="MEDRECALL_AGENT_LLM_API_KEY")
+    agent_llm_model: str = Field(default="", alias="MEDRECALL_AGENT_LLM_MODEL")
+    agent_llm_base_url: str = Field(
+        default="https://api.openai.com/v1", alias="MEDRECALL_AGENT_LLM_BASE_URL"
+    )
+    agent_llm_timeout_seconds: float = Field(
+        default=15.0, alias="MEDRECALL_AGENT_LLM_TIMEOUT_SECONDS"
+    )
+    agent_llm_max_tokens: int = Field(
+        default=300, alias="MEDRECALL_AGENT_LLM_MAX_TOKENS"
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
