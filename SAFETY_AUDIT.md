@@ -16,9 +16,9 @@ Audited: 2026-11-07 · version 0.1.0 · decision: **PASS**
 
 | Verification | Command | Result |
 |---|---|---|
-| Static enforcement chain | `node scripts/safety_audit.mjs` | ✅ 12 areas, all enforced |
-| Live adversarial API audit | `node scripts/safety_audit.mjs` | ✅ 13 scenarios, **124 checks, 0 failures** |
-| Backend test suite | `cd backend && pytest` | ✅ **375 passed, 0 failed** |
+| Static enforcement chain | `node scripts/safety_audit.mjs` | ✅ 13 areas, all enforced |
+| Live adversarial API audit | `node scripts/safety_audit.mjs` | ✅ 14 scenarios, **149 checks, 0 failures** |
+| Backend test suite | `cd backend && pytest` | ✅ **390 passed, 0 failed** |
 | Frontend render + i18n audit | `node scripts/frontend_verify.mjs` | ✅ **195 checks, 0 failures** |
 | Live API contract (pages' data) | `node scripts/api_contract.mjs` | ✅ **216 checks, 0 failures** |
 | Production build | `cd frontend && npm run build` | ✅ 107 modules, 271 kB JS |
@@ -30,7 +30,7 @@ Statuses observed across every audit run: `clear`, `unclear`, `confirmed`,
 
 ## 1. The enforcement chain (defence in depth)
 
-There is no single switch that implements the safety rule. Twelve independent
+There is no single switch that implements the safety rule. Thirteen independent
 layers each enforce it, so a bug in one cannot leak an unclear line:
 
 | # | Layer | Mechanism | Where | Proof |
@@ -47,6 +47,7 @@ layers each enforce it, so a bug in one cannot leak an unclear line:
 | 10 | **Disclaimer** | Persistent footer on every route, on the printed PDF, and in every schedule payload — in English, Tamil and Hindi | `App.jsx`, `Disclaimer.jsx`, `pdf.py`, `translate.py` | audit A10 · frontend verify (every route × 3 languages) |
 | 11 | **Reminder dispatch** | Enrollment skips unclear/as-needed/no-slot items. Right before **every** send the dispatcher re-checks: schedule active, item scheduleable, not SOS/PRN, inside the grace window, explicit per-channel consent. No consent → `blocked`; unconfigured provider → `failed` (never "sent") | `backend/app/reminders.py`, `backend/app/channels/` | audit A11/B12 · `tests/test_reminders.py` |
 | 12 | **Care agent** | Read-only. Answers from the same `build_schedule`; names unclear items but never gives their dose/time; describes SOS items as having no fixed time; refuses dose changes, interactions and diagnosis; escalates symptoms/emergencies. The optional LLM gets verified context only and its answer is rejected unless every number/unit/time is already verified | `backend/app/agent/` | audit A12/B13 · `tests/test_agent.py` |
+| 13 | **Admin dashboard** | Strictly read-only ops console on a separate credential (`MEDRECALL_ADMIN_*`, HMAC + `compare_digest`, 5-tries/15-min lockout) and a separate token type (`type=admin`, 8 h). Unconfigured → login 503, routes 401 (fails closed). Patient tokens are rejected on `/api/admin/*` and admin tokens on patient routes — 401 both ways. It only *views* rows through the same serializers; it cannot confirm, edit, enroll or dispatch | `backend/app/routers/admin.py`, `core/security.py` | audit A13/B14 · `tests/test_admin.py` |
 
 ---
 
@@ -74,6 +75,12 @@ All of these were executed against the **live** API (not mocks):
 | Agent asked for the timetable | only verified fixed slots | ✅ `08:00`/`13:00`/`21:00`; no unclear/SOS items |
 | Agent called without a Bearer token | `401` | ✅ 401 |
 | LLM answer containing `1000 mg` / `10:00` (unit test) | rejected, deterministic fallback | ✅ rejected by `is_safe_answer` |
+| Patient token used on `/api/admin/stats` | `401` | ✅ 401 |
+| Admin token used on `/api/patients/me` | `401` | ✅ 401 |
+| Admin route called without any token | `401` | ✅ 401 |
+| Admin login with wrong password (random username) | `401`, then `429` after 5 tries | ✅ 401 · lockout proven in `test_admin.py` |
+| Admin login on an unconfigured server | `503` (fail closed), routes `401` | ✅ 503 / 401 |
+| Admin endpoints mutating a row | impossible — module greps clean for `db.add/commit/delete` | ✅ read-only (A13) |
 
 **Real-world confidence check:** the same audit runs a genuine Tesseract upload
 of `sample_data/rx.png` — 4 lines extracted, 3 `clear`, 1 `unclear`
@@ -89,10 +96,10 @@ cd backend
 uvicorn app.main:app            # http://localhost:8000
 
 # terminal 2 — audit (from the repo root)
-node scripts/safety_audit.mjs    # 124 checks: static chain + live adversarial
+node scripts/safety_audit.mjs    # 149 checks: static chain + live adversarial
 node scripts/api_contract.mjs    # 216 checks: every payload the UI consumes
 node scripts/frontend_verify.mjs # 195 checks: bundle, i18n, SSR of all routes
-cd backend && pytest             # 375 tests
+cd backend && pytest             # 390 tests
 
 # production build
 cd frontend && npm run build

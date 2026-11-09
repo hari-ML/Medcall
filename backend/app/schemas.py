@@ -291,3 +291,79 @@ class AgentChatOut(BaseModel):
 class AgentSuggestionsOut(BaseModel):
     lang: str
     suggestions: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Admin dashboard (Phase 6) — read-only, separate credential
+# ---------------------------------------------------------------------------
+
+
+class AdminLoginIn(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class AdminLoginOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    role: str = "admin"
+
+
+class AdminStatsOut(BaseModel):
+    patients: int
+    prescriptions: int
+    #: item status -> count across all patients
+    items_by_status: dict[str, int]
+    active_reminder_schedules: int
+    #: occurrence status -> count (pending/sent/blocked/failed/missed/cancelled)
+    occurrences_by_status: dict[str, int]
+    #: consented channel -> patient count
+    consent_by_channel: dict[str, int]
+
+
+class AdminPatientOut(BaseModel):
+    id: int
+    phone: str
+    full_name: str
+    preferred_lang: str
+    timezone: str
+    created_at: datetime
+    prescriptions: int
+    items: int
+    active_schedules: int
+
+
+class AdminPatientsOut(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[AdminPatientOut]
+
+
+class AdminPatientDetailOut(BaseModel):
+    patient: PatientOut
+    prescriptions: list[PrescriptionOut]
+    consent: list[ConsentOut]
+    active_schedules: int
+
+
+class AdminOccurrenceOut(BaseModel):
+    id: int
+    patient_id: int
+    patient_phone: str
+    medicine: str
+    slot: str
+    #: local HH:MM in the patient's timezone
+    time_of_day: str
+    #: naive UTC ISO timestamp
+    scheduled_at: datetime
+    status: str
+    channel: str
+    attempts: int
+    sent_at: Optional[datetime] = None
+
+
+class AdminRemindersOut(BaseModel):
+    limit: int
+    items: list[AdminOccurrenceOut]

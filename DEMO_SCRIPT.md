@@ -113,6 +113,12 @@ with your doctor or pharmacist."*
   timetable, never gives a dose or time for an unclear item, and refuses dose
   changes, interactions and diagnosis. An optional LLM may rephrase unmatched
   questions, but any unverified number/unit/time is rejected.
+- **"Is there an admin view?"** → Yes: `POST /api/admin/login` with
+  `MEDRECALL_ADMIN_USERNAME`/`MEDRECALL_ADMIN_PASSWORD` (unset = disabled, fail
+  closed) opens a **read-only** ops console — `/api/admin/stats`, paginated
+  patients, any prescription, and a cross-patient reminder feed. It cannot
+  confirm, edit, enroll or send anything, and its token is rejected on patient
+  routes (and vice versa).
 - **"What's real vs mocked?"** → Real Tesseract OCR (eng+tam+hin), real FastAPI +
   SQLite, real ReportLab PDFs with Noto fonts, real phone-OTP auth and reminder
   engine. Delivery providers use fake channels by default; real WhatsApp/Twilio

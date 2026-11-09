@@ -1,4 +1,4 @@
-"""MedRecall FastAPI application — assembly only (Phase 1, Phase 2, Phase 5).
+"""MedRecall FastAPI application — assembly only (Phase 1, Phase 2, Phase 5, Phase 6).
 
 Endpoints
 ---------
@@ -24,13 +24,19 @@ POST   /api/reminders/run                          one manual generate+dispatch 
 GET    /api/reminders/history                      sent / blocked / missed occurrences
 POST   /api/agent/chat                             grounded answer about own verified data
 GET    /api/agent/suggestions                      localized starter questions
+POST   /api/admin/login                            admin login (env-configured credential)
+GET    /api/admin/stats                            dashboard counts (patients/items/reminders)
+GET    /api/admin/patients                         paginated cross-patient list
+GET    /api/admin/patients/{id}                    one patient + prescriptions + consent
+GET    /api/admin/prescriptions/{id}               any prescription (admin view)
+GET    /api/admin/reminders                        cross-patient occurrence feed
 GET    /api/health                               OCR availability check
 POST   /api/demo                                 prefilled prescription (no OCR)
 GET    /uploads/{filename}?exp=..&sig=..         signed, expiring image URL (15 min)
 
 Route handlers live in ``app/routers/`` (``auth.py``, ``patients.py``,
-``prescriptions.py``, ``reminders.py``, ``agent.py``, ``system.py``); this
-module wires the app together: settings, logging, CORS, request-ID middleware,
+``prescriptions.py``, ``reminders.py``, ``agent.py``, ``admin.py``, ``system.py``);
+this module wires the app together: settings, logging, CORS, request-ID middleware,
 exception handlers, the reminder dispatcher lifespan and ``init_db()``.
 
 Auth (Phase 2): every /api/* route except /api/health and the /api/auth
@@ -65,7 +71,7 @@ from .core.middleware import RequestContextMiddleware
 from .db import init_db
 from .ocr import OcrError
 from .reminders import dispatcher_loop
-from .routers import agent, auth, patients, prescriptions, reminders, system
+from .routers import admin, agent, auth, patients, prescriptions, reminders, system
 from .translate import TranslationError, UnsupportedLanguageError
 
 # ---------------------------------------------------------------------------
@@ -143,4 +149,5 @@ app.include_router(patients.router)
 app.include_router(prescriptions.router)
 app.include_router(reminders.router)
 app.include_router(agent.router)
+app.include_router(admin.router)
 app.include_router(system.router)

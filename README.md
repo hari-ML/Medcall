@@ -53,7 +53,7 @@ medrecall/
 │   ├── app/
 │   │   ├── main.py          FastAPI assembly (routers, CORS, lifespan)
 │   │   ├── core/            settings, logging, request-ID, auth/security, deps
-│   │   ├── routers/         auth, patients, prescriptions, reminders, agent, system
+│   │   ├── routers/         auth, patients, prescriptions, reminders, agent, admin, system
 │   │   ├── agent/           grounded care agent: context, intents, responder, llm
 │   │   ├── ocr.py           image/PDF → text lines + confidence (Tesseract)
 │   │   ├── extract.py       OCR lines → candidate medicine lines
@@ -65,7 +65,7 @@ medrecall/
 │   │   ├── models.py db.py schemas.py   database + API schemas
 │   │   └── seed.py          demo data + CLI seeder
 │   ├── fonts/               NotoSansTamil / NotoSansDevanagari (see fonts/README.md)
-│   ├── tests/               pytest suite (375 tests)
+│   ├── tests/               pytest suite (390 tests)
 │   ├── uploads/             uploaded images (runtime)
 │   ├── requirements.txt  pytest.ini
 ├── frontend/                React + Vite + Tailwind app
@@ -220,6 +220,12 @@ code). Prescriptions are scoped to the caller — someone else's id is a 404.
 | `GET` | `/api/reminders/history` | sent / blocked / failed / missed occurrences |
 | `POST` | `/api/agent/chat` | grounded answer from the caller's own verified data |
 | `GET` | `/api/agent/suggestions?lang=` | localized starter questions |
+| `POST` | `/api/admin/login` | admin username + password → admin token (503 if unconfigured) |
+| `GET` | `/api/admin/stats` | dashboard counts: patients, items by status, reminders, consent |
+| `GET` | `/api/admin/patients?page=&page_size=` | paginated cross-patient list |
+| `GET` | `/api/admin/patients/{id}` | one patient + prescriptions + consent |
+| `GET` | `/api/admin/prescriptions/{id}` | any prescription (read-only admin view) |
+| `GET` | `/api/admin/reminders?status=&limit=` | cross-patient occurrence feed (read-only) |
 | `POST` | `/api/demo` | prefilled prescription (3 clear + 1 unclear) |
 | `GET` | `/api/health` | Tesseract + language availability |
 
@@ -242,13 +248,21 @@ deterministic by default; an optional OpenAI-compatible LLM may rephrase only
 unmatched questions, and any answer containing an unverified number, unit or
 time is rejected (`MEDRECALL_AGENT_LLM_*` in `.env.example`).
 
+The **admin dashboard API** (`/api/admin/*`) is a read-only ops console with a
+separate credential: username + password from `MEDRECALL_ADMIN_USERNAME` /
+`MEDRECALL_ADMIN_PASSWORD` (both empty → login 503 and all admin routes 401,
+i.e. disabled by default). Admin tokens are a distinct type (`type=admin`, 8 h)
+and never work on patient routes — and patient tokens never work on admin
+routes. The admin layer only reads: it cannot confirm, edit, enroll or send
+anything (`.env.example` lists the variables).
+
 ---
 
 ## Tests
 
 ```bash
 cd backend
-pytest            # 375 tests: parser, gate, translation, safety invariants, auth, reminders, providers, agent, API
+pytest            # 390 tests: parser, gate, translation, safety invariants, auth, reminders, providers, agent, admin, API
 ```
 
 What the suite covers:
@@ -269,7 +283,10 @@ What the suite covers:
   classification, and retry backoff (`tests/test_channels.py`);
 * the care agent: verified-only answers, no dose/time for unclear or SOS items,
   dose-change/diagnosis/interaction refusals, Tamil/Hindi replies, patient
-  isolation, and the LLM numeric/time safety filter (`tests/test_agent.py`).
+  isolation, and the LLM numeric/time safety filter (`tests/test_agent.py`);
+* the admin dashboard: login lockout, token-family isolation both ways,
+  pagination, cross-patient views, and a read-only guarantee — admin requests
+  never change a row (`tests/test_admin.py`).
 
 ## Safety audit
 
@@ -278,12 +295,12 @@ limitations — is in **[`SAFETY_AUDIT.md`](SAFETY_AUDIT.md)**. It is reproducib
 
 ```bash
 # with the backend running on :8000, from the repo root
-node scripts/safety_audit.mjs      # 124 checks — static enforcement + live adversarial (incl. agent + reminders)
+node scripts/safety_audit.mjs      # 149 checks — static enforcement + live adversarial (incl. agent + admin + reminders)
 node scripts/api_contract.mjs      # 216 checks — every payload the five pages consume
 node scripts/frontend_verify.mjs   # 195 checks — bundle, i18n, SSR of all routes
 ```
 
-Last run: pytest **375 passed**; audits **124 / 216 / 195 checks, 0 failures**.
+Last run: pytest **390 passed**; audits **149 / 216 / 195 checks, 0 failures**.
 The live audit tries to inject `status:"clear"` through five different PATCH
 payloads, uploads blank/oversize/empty files, and confirms the unclear demo line
 stays out of the schedule, PDF and reminders until it is confirmed — and appears

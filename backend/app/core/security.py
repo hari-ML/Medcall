@@ -26,6 +26,7 @@ from .config import get_secret_key
 ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL = timedelta(minutes=15)
 REFRESH_TOKEN_TTL = timedelta(days=30)
+ADMIN_TOKEN_TTL = timedelta(hours=8)
 OTP_TTL = timedelta(minutes=10)
 OTP_MAX_ATTEMPTS = 5
 
@@ -103,6 +104,83 @@ def decode_refresh_token(token: str) -> tuple[int, str]:
         return int(payload["sub"]), str(payload["jti"])
     except (KeyError, ValueError) as exc:
         raise TokenError("Invalid refresh token") from exc
+
+
+# ---------------------------------------------------------------------------
+# Admin (Phase 6): separate credential, separate token type
+# ---------------------------------------------------------------------------
+
+
+def create_admin_token() -> tuple[str, int]:
+    """Admin access token (no refresh cookie): 8 h TTL, ``type=admin``."""
+    now = _now()
+    exp = now + ADMIN_TOKEN_TTL
+    payload = {
+        "sub": "admin",
+        "type": "admin",
+        "iat": int(now.timestamp()),
+        "exp": int(exp.timestamp()),
+        "jti": uuid.uuid4().hex,
+    }
+    return jwt.encode(payload, get_secret_key(), algorithm=ALGORITHM), int(
+        ADMIN_TOKEN_TTL.total_seconds()
+    )
+
+
+def decode_admin_token(token: str) -> None:
+    """Validate an admin token. Raises :class:`TokenError` on any mismatch —
+    including patient/refresh tokens presented to admin routes."""
+    try:
+        payload = jwt.decode(token, get_secret_key(), algorithms=[ALGORITHM])
+    except jwt.ExpiredSignatureError as exc:
+        raise TokenError("Admin token expired") from exc
+    except jwt.InvalidTokenError as exc:
+        raise TokenError("Invalid admin token") from exc
+    if payload.get("type") != "admin" or payload.get("sub") != "admin":
+        raise TokenError("Wrong token type")
+
+
+def _admin_hash(username: str, password: str) -> str:
+    return hmac.new(
+        get_secret_key().encode(), f"admin:{username}:{password}".encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def verify_admin_credentials(username: str, password: str, configured_username: str, configured_password: str) -> bool:
+    """Constant-time check against the env-configured admin account.
+
+    Always hashes both sides (even when credentials are empty) so response
+    timing does not reveal which of username/password was wrong.
+    """
+    expected = _admin_hash(configured_username, configured_password)
+    return hmac.compare_digest(_admin_hash(username, password), expected)
+
+
+#: failed-admin-login lockout: N failures per window (in-memory, per process)
+ADMIN_MAX_FAILURES = 5
+ADMIN_FAILURE_WINDOW = timedelta(minutes=15)
+
+_admin_failures: dict[str, list[datetime]] = {}
+
+
+def admin_lockout_active(username: str) -> bool:
+    window_start = _now() - ADMIN_FAILURE_WINDOW
+    stamps = [s for s in _admin_failures.get(username, []) if s > window_start]
+    _admin_failures[username] = stamps
+    return len(stamps) >= ADMIN_MAX_FAILURES
+
+
+def record_admin_failure(username: str) -> None:
+    _admin_failures.setdefault(username, []).append(_now())
+
+
+def clear_admin_failures(username: str) -> None:
+    _admin_failures.pop(username, None)
+
+
+def reset_admin_failures() -> None:
+    """Test helper: clear the in-memory lockout table."""
+    _admin_failures.clear()
 
 
 # ---------------------------------------------------------------------------

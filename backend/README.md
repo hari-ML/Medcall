@@ -58,7 +58,7 @@ real database (`MEDRECALL_DB` is overridden to a temp file by `tests/conftest.py
 | `seed.py` | `DEMO_TEXT`, shared prescription builder, CLI seeder |
 | `main.py` | app assembly: settings, CORS, middleware, exception handlers, dispatcher lifespan, `init_db()` |
 | `core/` | `config.py` (settings/env/uploads), `logging.py`, `middleware.py` (request-ID), `security.py` (JWT/OTP/signed URLs), `deps.py` (`get_current_patient`) |
-| `routers/` | `auth.py`, `patients.py`, `prescriptions.py`, `reminders.py`, `agent.py`, `system.py`, `serializers.py` |
+| `routers/` | `auth.py`, `patients.py`, `prescriptions.py`, `reminders.py`, `agent.py`, `admin.py`, `system.py`, `serializers.py` |
 | `reminders.py` | Phase 3 engine: enrollment, timezone-aware occurrence generation, consent-gated dispatch, retry/backoff, background loop + `python -m app.reminders --tick` |
 | `channels/` | `ChannelAdapter` interface, `FakeChannel` (dev), real WhatsApp Cloud API + Twilio SMS/voice adapters (credential-gated; no medical imports) |
 | `agent/` | Phase 5 read-only care agent: `context.py` (verified, patient-scoped data via `build_schedule`), `intents.py` (en/ta/hi), `responder.py` (deterministic answers), `llm.py` (optional OpenAI-compatible rephrasing + `is_safe_answer` guard), `service.py` (orchestration) |
@@ -95,6 +95,7 @@ database.
 | `MEDRECALL_AGENT_LLM_API_KEY` / `MEDRECALL_AGENT_LLM_MODEL` | LLM credentials/model; both required for the fallback to run | unset |
 | `MEDRECALL_AGENT_LLM_BASE_URL` | OpenAI-compatible base URL | `https://api.openai.com/v1` |
 | `MEDRECALL_AGENT_LLM_TIMEOUT_SECONDS` / `MEDRECALL_AGENT_LLM_MAX_TOKENS` | LLM request timeout / answer cap | `15` / `300` |
+| `MEDRECALL_ADMIN_USERNAME` / `MEDRECALL_ADMIN_PASSWORD` | admin dashboard credential (both empty = disabled: login 503, routes 401) | unset |
 
 ## Safety rule (enforced, not just documented)
 
@@ -123,6 +124,14 @@ database.
    as-needed items. The optional LLM receives verified context only; any
    answer with an unverified number, unit or time is rejected and the
    deterministic fallback is returned (`tests/test_agent.py`, audit A12/B13).
+9. The admin dashboard (`routers/admin.py`) is strictly read-only — no
+   `db.add/commit/delete` anywhere in the module — and only *views* rows
+   through the same serializers; it can never confirm, edit, enroll or send.
+   Its credential comes from env and is checked with `hmac.compare_digest`
+   behind a 5-tries/15-min lockout; its token type (`type=admin`) is rejected
+   on patient routes just as patient tokens are rejected on admin routes.
+   Unconfigured credentials fail closed (login 503, routes 401)
+   (`tests/test_admin.py`, audit A13/B14).
 
 ## Error responses
 
@@ -131,10 +140,11 @@ All errors are plain JSON: `{"detail": "…"}`
 | Status | When |
 |---|---|
 | 400 | empty file, edit without `fields` |
-| 401 | missing/invalid/expired access token |
+| 401 | missing/invalid/expired access token — also a patient token on `/api/admin/*` or an admin token on patient routes |
 | 403 | bad, forged or expired signed image URL |
 | 404 | unknown prescription/item — also someone else's record (no existence leak) |
 | 413 | upload > 10 MB |
 | 415 | not JPG/PNG/PDF |
 | 422 | OCR failure, no medicine lines found, invalid `lang`/timezone, blank agent message |
-| 429 | too many OTP requests for one phone |
+| 429 | too many OTP requests for one phone · 5 failed admin logins per username per 15 min |
+| 503 | admin access not configured (`MEDRECALL_ADMIN_*` unset) · OTP request in production without an SMS provider |

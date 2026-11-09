@@ -244,6 +244,39 @@ check(/class AgentChatIn/.test(agentSchemasSrc) && /class AgentChatOut/.test(age
 check(/agent_llm_provider: str = Field\(default="none"/.test(configSrc),
   'LLM must be off by default')
 
+section('A13. admin dashboard: read-only, separate credential, fails closed')
+const adminRouterFile = path.join(APP, 'routers/admin.py')
+check(fs.existsSync(adminRouterFile), 'admin router missing')
+const adminRouterSrc = read(adminRouterFile)
+check(!/(?:db\.add|db\.commit|db\.delete)\(/.test(adminRouterSrc),
+  'admin layer must never write to the database')
+check((adminRouterSrc.match(/get_current_admin/g) || []).length >= 5,
+  'every admin read route must require get_current_admin')
+check(!/payload\.password\s*==|==\s*payload\.password|settings\.admin_password\s*==|==\s*settings\.admin_password/.test(adminRouterSrc),
+  'admin router must never compare the password in plaintext')
+const securitySrc = read(path.join(APP, 'core/security.py'))
+check(/def create_admin_token/.test(securitySrc) && /"type":\s*"admin"/.test(securitySrc),
+  'admin token must carry type=admin')
+check(/def verify_admin_credentials/.test(securitySrc) && /hmac\.compare_digest/.test(securitySrc),
+  'admin credential check must be constant-time (hmac.compare_digest)')
+check(/def admin_lockout_active/.test(securitySrc) && /ADMIN_MAX_FAILURES/.test(securitySrc),
+  'admin login lockout helpers missing')
+const depsSrc = read(path.join(APP, 'core/deps.py'))
+check(/def get_current_admin/.test(depsSrc) && /decode_admin_token/.test(depsSrc),
+  'get_current_admin must decode the admin token type')
+check(/include_router\(admin\.router\)/.test(read(path.join(APP, 'main.py'))),
+  'admin router not wired in main.py')
+check(/admin_username: str = Field\(default=""/.test(configSrc) &&
+  /admin_password: str = Field\(default=""/.test(configSrc),
+  'admin credentials must default to empty (fail closed)')
+check(/def admin_configured/.test(configSrc), 'admin_configured property missing')
+check(/status_code=503/.test(adminRouterSrc) && /admin_configured/.test(adminRouterSrc),
+  'unconfigured admin login must answer 503')
+const adminSchemasSrc = read(path.join(APP, 'schemas.py'))
+check(/class AdminLoginIn/.test(adminSchemasSrc) && /class AdminStatsOut/.test(adminSchemasSrc) &&
+  /class AdminOccurrenceOut/.test(adminSchemasSrc),
+  'admin schemas missing')
+
 // ===========================================================================
 // PART B — live adversarial API audit
 // ===========================================================================
@@ -572,6 +605,80 @@ section('B13. AI care agent answers only from the verified timetable')
     'agent sources leak another prescription')
   check(sources.every((source) => ['clear', 'confirmed', 'edited', 'unclear'].includes(source.status)),
     'agent source has an unknown status')
+}
+
+section('B14. admin dashboard: separate credential, read-only, fails closed')
+{
+  const adminUser = process.env.MEDRECALL_ADMIN_USERNAME || ''
+  const adminPass = process.env.MEDRECALL_ADMIN_PASSWORD || ''
+  const adminPost = (url, payload, token) =>
+    fetch(`${BASE}${url}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: 'Bearer ' + token } : {}),
+      },
+      body: JSON.stringify(payload),
+    }).then(async (res) => ({ status: res.status, body: await res.json().catch(() => null) }))
+  const adminGet = (url, token) =>
+    fetch(`${BASE}${url}`, { headers: token ? { Authorization: 'Bearer ' + token } : {} })
+      .then(async (res) => ({ status: res.status, body: await res.json().catch(() => null) }))
+
+  if (!adminUser || !adminPass) {
+    // Unconfigured in this audit process -> the dashboard must fail closed.
+    const login = await adminPost('/api/admin/login', { username: 'admin', password: 'x' })
+    check(login.status === 503, `unconfigured admin login -> ${login.status} (want 503)`)
+    check((await adminGet('/api/admin/stats')).status === 401,
+      'unconfigured admin stats must be 401')
+    check((await adminGet('/api/admin/patients')).status === 401,
+      'unconfigured admin patients must be 401')
+  } else {
+    // Wrong credentials with a RANDOM username (never the configured one):
+    // the lockout is per-username, in-memory server-side, so repeated audit
+    // runs must never accumulate failures against the real admin account.
+    const bogus = 'audit-' + Math.random().toString(36).slice(2, 10)
+    const bad = await adminPost('/api/admin/login', { username: bogus, password: 'wrong-' + bogus })
+    check(bad.status === 401, `bad admin login -> ${bad.status} (want 401)`)
+
+    const ok = await adminPost('/api/admin/login', { username: adminUser, password: adminPass })
+    check(ok.status === 200 && ok.body?.access_token, `admin login -> ${ok.status}`)
+    const token = ok.body?.access_token || ''
+
+    const stats = await adminGet('/api/admin/stats', token)
+    check(stats.status === 200 && stats.body?.patients >= 1 && stats.body?.prescriptions >= 1,
+      `admin stats -> ${stats.status}`)
+    check(Object.keys(stats.body?.items_by_status || {}).length > 0,
+      'admin stats missing item statuses')
+
+    const patients = await adminGet('/api/admin/patients?page=1&page_size=10', token)
+    check(patients.status === 200 && patients.body?.items?.length >= 1,
+      `admin patients -> ${patients.status}`)
+
+    const firstId = patients.body?.items?.[0]?.id
+    const detail = await adminGet(`/api/admin/patients/${firstId}`, token)
+    check(detail.status === 200 && detail.body?.patient?.id === firstId,
+      `admin patient detail -> ${detail.status}`)
+
+    const rxId = detail.body?.prescriptions?.[0]?.id
+    const rx = await adminGet(`/api/admin/prescriptions/${rxId}`, token)
+    check(rx.status === 200 && rx.body?.id === rxId, `admin prescription view -> ${rx.status}`)
+
+    const reminders = await adminGet('/api/admin/reminders?limit=5', token)
+    check(reminders.status === 200 && Array.isArray(reminders.body?.items),
+      `admin reminders -> ${reminders.status}`)
+    check((reminders.body?.items || []).every(
+      (row) => ['pending', 'sent', 'blocked', 'failed', 'missed', 'cancelled'].includes(row.status)),
+      'admin feed row has an unknown status')
+
+    // Token families must never cross the patient/admin boundary.
+    const patientTok = (AUTH_HEADERS.Authorization || '').replace('Bearer ', '')
+    check((await adminGet('/api/admin/stats', patientTok)).status === 401,
+      'patient token on admin route must be 401')
+    check((await adminGet('/api/patients/me', token)).status === 401,
+      'admin token on patient route must be 401')
+    check((await adminGet('/api/admin/stats')).status === 401,
+      'anonymous admin route must be 401')
+  }
 }
 
 // ===========================================================================

@@ -146,6 +146,16 @@ class Settings(BaseSettings):
         default=300, alias="MEDRECALL_AGENT_LLM_MAX_TOKENS"
     )
 
+    # --- Admin dashboard (Phase 6) -----------------------------------------
+    #: both empty = admin access disabled (login and all /api/admin routes
+    #: answer 503/401 — the dashboard fails closed, like production OTP)
+    admin_username: str = Field(default="", alias="MEDRECALL_ADMIN_USERNAME")
+    admin_password: str = Field(default="", alias="MEDRECALL_ADMIN_PASSWORD")
+
+    @property
+    def admin_configured(self) -> bool:
+        return bool(self.admin_username.strip() and self.admin_password.strip())
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
