@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { getReminders, getSchedule, timetablePdfUrl } from '../api'
+import {
+  enrollReminders,
+  getReminders,
+  getSchedule,
+  timetablePdfUrl,
+  unenrollReminders,
+} from '../api'
 import DoseCard from '../components/DoseCard'
 import WarningCard from '../components/WarningCard'
 import { SLOT_ORDER, useI18n } from '../i18n'
@@ -33,6 +39,9 @@ export default function Timetable() {
   const [error, setError] = useState(null)
   const [permission, setPermission] = useState(() => permissionState())
   const [active, setActive] = useState(() => remindersActive())
+  const [enrollment, setEnrollment] = useState(null)
+  const [enrollBusy, setEnrollBusy] = useState(false)
+  const [enrollError, setEnrollError] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -78,6 +87,34 @@ export default function Timetable() {
 
   function handlePrint() {
     window.open(timetablePdfUrl(pid, lang), '_blank', 'noopener')
+  }
+
+  // Server-side reminder engine (Phase 3): one schedule per verified fixed
+  // slot. The backend skips unclear/as-needed lines by itself — whatever it
+  // returns in `skipped` is shown with its reason, never silently dropped.
+  async function handleEnroll() {
+    setEnrollBusy(true)
+    setEnrollError(null)
+    try {
+      setEnrollment(await enrollReminders(pid))
+    } catch (err) {
+      setEnrollError(err?.message || t('errorGeneric'))
+    } finally {
+      setEnrollBusy(false)
+    }
+  }
+
+  async function handleUnenroll() {
+    setEnrollBusy(true)
+    setEnrollError(null)
+    try {
+      await unenrollReminders(pid)
+      setEnrollment(null)
+    } catch (err) {
+      setEnrollError(err?.message || t('errorGeneric'))
+    } finally {
+      setEnrollBusy(false)
+    }
   }
 
   if (loading) {
@@ -158,6 +195,71 @@ export default function Timetable() {
           {error}
         </div>
       ) : null}
+
+      {/* server-side dose reminders (WhatsApp / SMS / voice, consent-gated) */}
+      <section className="card">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800">📲 {t('serverRemindersTitle')}</h2>
+            <p className="mt-1 text-slate-600">{t('serverRemindersHint')}</p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {enrollment ? (
+              <button
+                type="button"
+                className="btn-danger-soft"
+                onClick={handleUnenroll}
+                disabled={enrollBusy}
+              >
+                {enrollBusy ? t('loading') : t('stopReminders')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleEnroll}
+                disabled={enrollBusy}
+              >
+                {enrollBusy ? t('loading') : `📲 ${t('sendReminders')}`}
+              </button>
+            )}
+            <Link to="/reminders" className="btn-secondary">
+              {t('openReminders')}
+            </Link>
+          </div>
+        </div>
+
+        {enrollError ? (
+          <div role="alert" className="mt-3 rounded-xl border-2 border-red-300 bg-red-50 p-3 text-red-800">
+            {enrollError}
+          </div>
+        ) : null}
+
+        {enrollment ? (
+          <div className="mt-4 space-y-3">
+            <p className="chip-ok">
+              {enrollment.scheduled_doses > 0
+                ? t('enrollScheduled', { n: enrollment.scheduled_doses })
+                : t('enrollNone')}
+            </p>
+            {enrollment.skipped?.length ? (
+              <div>
+                <p className="font-semibold text-amber-900">
+                  {t('enrollSkipped', { n: enrollment.skipped.length })}
+                </p>
+                <ul className="mt-2 space-y-2">
+                  {enrollment.skipped.map((row) => (
+                    <li key={row.item_id} className="rounded-xl bg-amber-50 p-3 text-amber-900">
+                      <span className="font-semibold">{row.medicine}</span> —{' '}
+                      {localizeReason(row.reason)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
 
       {/* SAFETY: excluded (unclear) lines — shown, never scheduled */}
       {excluded.length > 0 ? (

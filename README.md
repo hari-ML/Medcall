@@ -19,7 +19,7 @@ users who manage many medicines.
 ## How it works
 
 ```
-Upload photo/PDF → OCR (Tesseract eng+tam+hin) → line extraction
+Sign in (phone + OTP) → Upload photo/PDF → OCR (Tesseract eng+tam+hin) → line extraction
                  → instruction parsing (dose, frequency, food timing, duration)
                  → UNCERTAINTY GATE (never guesses)
                  → human confirmation / edit for unclear lines
@@ -70,9 +70,10 @@ medrecall/
 │   ├── requirements.txt  pytest.ini
 ├── frontend/                React + Vite + Tailwind app
 │   ├── src/
-│   │   ├── pages/           Home, Upload, Review, Language, Timetable
+│   │   ├── pages/           Home, Login, Upload, Review, Language, Timetable, Reminders, Agent
 │   │   ├── components/      Header, DoseCard, MedicineLine, WarningCard, Disclaimer, LanguageCard
 │   │   ├── i18n.jsx         UI translations en/ta/hi + language context
+│   │   ├── auth.jsx         session (OTP login), route guard, silent refresh
 │   │   ├── api.js reminders.js store.js
 │   │   └── main.jsx App.jsx
 ├── sample_data/             prescription text fixtures + rx.png (real-OCR sample)
@@ -179,14 +180,21 @@ The dev server proxies `/api` and `/uploads` to the backend on `:8000`
 
 > A timed, judge-ready walkthrough (and fallbacks) is in **[`DEMO_SCRIPT.md`](DEMO_SCRIPT.md)**.
 
-1. On **Home**, click **“Try demo prescription”** (or `POST /api/demo`).
-2. **Review** screen: 3 lines are ✅ *clear*, line 3 is ⚠️ *“Dose unreadable”*
+1. **Sign in** at `/login`: enter a phone number → *Send code* (dev mode shows
+   the code on screen and autofills it) → *Verify & continue*.
+2. On **Home**, click **“Try demo prescription”** (or `POST /api/demo`).
+3. **Review** screen: 3 lines are ✅ *clear*, line 3 is ⚠️ *“Dose unreadable”*
    (“We won't guess.”) → **Edit manually** (e.g. `10 mg`) or **Confirm**.
-3. **Generate schedule** is disabled-looking until you resolve it (or choose
+4. **Generate schedule** is disabled-looking until you resolve it (or choose
    *“Schedule only confirmed items”*).
-4. **Language**: pick English / தமிழ் / हिन्दी — the schedule, PDF and UI switch.
-5. **Timetable**: 4 slot cards, *Mark as taken* (updates the Home progress bar),
-   *Print timetable* (PDF), *Enable reminders* (browser notifications while open).
+5. **Language**: pick English / தமிழ் / हिन्दी — the schedule, PDF and UI switch.
+6. **Timetable**: 4 slot cards, *Mark as taken* (updates the Home progress bar),
+   *Print timetable* (PDF), *Enable reminders* (browser notifications while open),
+   and the **server reminder card** — *Start reminders* enrolls the confirmed
+   doses in the backend engine (skipped lines are shown with their reason).
+7. **Reminders** page: per-channel consent switches (default deny), upcoming
+   occurrences, delivery history and a *Check now* manual tick. **Ask** page:
+   grounded chat over your own confirmed timetable.
 
 Real upload: click **Scan prescription** and drop a JPG/PNG/PDF of a prescription
 (sample text fixtures live in `sample_data/`).
@@ -296,11 +304,11 @@ limitations — is in **[`SAFETY_AUDIT.md`](SAFETY_AUDIT.md)**. It is reproducib
 ```bash
 # with the backend running on :8000, from the repo root
 node scripts/safety_audit.mjs      # 149 checks — static enforcement + live adversarial (incl. agent + admin + reminders)
-node scripts/api_contract.mjs      # 216 checks — every payload the five pages consume
-node scripts/frontend_verify.mjs   # 195 checks — bundle, i18n, SSR of all routes
+node scripts/api_contract.mjs      # 216 checks — every payload the eight pages consume
+node scripts/frontend_verify.mjs   # 252 checks — bundle, i18n, SSR of all 8 routes
 ```
 
-Last run: pytest **390 passed**; audits **149 / 216 / 195 checks, 0 failures**.
+Last run: pytest **390 passed**; audits **149 / 216 / 252 checks, 0 failures**.
 The live audit tries to inject `status:"clear"` through five different PATCH
 payloads, uploads blank/oversize/empty files, and confirms the unclear demo line
 stays out of the schedule, PDF and reminders until it is confirmed — and appears
@@ -329,11 +337,14 @@ python -m app.seed --list
   it is not a medical translation engine.
 * The app never validates drug interactions or dosing appropriateness — that is a
   doctor's/pharmacist's job.
-* **Single-user local SQLite, no authentication** — this is a hackathon MVP. A real
-  deployment would need accounts, encrypted storage and audit logging.
-* **"Taken" marks, language choice and the last prescription ID live in
-  `localStorage`** — clearing browser data resets them. Prescription records
-  themselves stay in the local SQLite database.
+* **Local SQLite + phone-OTP accounts** — single-machine storage; a real
+  deployment would need a real database, encrypted storage and audit logging.
+  OTPs are echoed on screen in development only (production 503s until an SMS
+  provider is wired).
+* **"Taken" marks, language choice and the session live in `localStorage`** —
+  clearing browser data signs you out (the refresh cookie also expires the
+  server session). Prescription records themselves stay in the local SQLite
+  database.
 * OCR packs are only `eng` + `tam` + `hin`; other scripts fall back to English
   (`GET /api/health` reports exactly which packs are installed).
 * Tamil/Hindi PDF fonts are optional — if absent the PDF prints in English with a

@@ -4,12 +4,15 @@
  * Run from the repo root:  node scripts/frontend_verify.mjs
  * (needs `npm install` in frontend/ — esbuild comes from its node_modules)
  *
- * 1. esbuild bundle of main.jsx + App.jsx + all six components + five pages
+ * 1. esbuild bundle of main.jsx + App.jsx + all six components + eight pages
  * 2. Server-render (react-dom/server) of Header, Disclaimer, MedicineLine
  *    (clear + unclear), DoseCard, WarningCard, LanguageCard in en/ta/hi.
  * 3. i18n parity: UI tables identical key sets across en/ta/hi, no empty
  *    strings, disclaimer/slot/reason/preview tables complete for 3 languages.
  * 4. Usage audit: every literal t('key') used in src exists in UI.en.
+ * 5. Full App render at every route (incl. the Phase 7 auth-protected
+ *    Login/Reminders/Agent screens) in all three languages — the app gets an
+ *    explicit `initialSession` so the route guard renders real content.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -81,7 +84,7 @@ try {
   })
   const size = fs.statSync(bundlePath).size
   check(size > 10_000, `bundle suspiciously small (${size} bytes)`)
-  console.log(`   OK — ${size} bytes bundled (main.jsx, App.jsx, ${COMPONENTS.length} components, 5 pages)`)
+  console.log(`   OK — ${size} bytes bundled (main.jsx, App.jsx, ${COMPONENTS.length} components, 8 pages)`)
 } catch (error) {
   failures.push('esbuild bundle failed: ' + (error?.message || error))
   console.error(error)
@@ -203,6 +206,19 @@ import LanguageCard from './components/LanguageCard.jsx'
 import DoseCard, { doseKey } from './components/DoseCard.jsx'
 import MedicineLine from './components/MedicineLine.jsx'
 
+// Phase 7: the app is behind phone-OTP auth; SSR passes an explicit session
+// through the same seam as initialLang, so protected routes render their
+// real content (no localStorage in Node).
+const SESSION = {
+  access_token: 'ssr-token',
+  expires_at: 4102444800000,
+  patient: {
+    id: 1, phone: '+919800000000', phone_verified: true, full_name: 'Test Patient',
+    preferred_lang: 'en', timezone: 'Asia/Kolkata', caregiver_name: '', caregiver_phone: '',
+    created_at: '2026-01-01T00:00:00Z',
+  },
+}
+
 const unclearItem = {
   id: 3, line_number: 3, medicine: 'Cetirizine', strength: null, form: 'tab',
   frequency: '0-0-1', food_timing: null, duration_days: null, as_needed: false,
@@ -277,6 +293,9 @@ globalThis.__routes = (function buildRouteRenders() {
     review: '/review/1',
     language: '/language/1',
     timetable: '/timetable/1',
+    login: '/login',
+    reminders: '/reminders',
+    agent: '/agent',
   }
   const out = {}
   for (const lang of ['en', 'ta', 'hi']) {
@@ -284,7 +303,7 @@ globalThis.__routes = (function buildRouteRenders() {
     for (const [name, route] of Object.entries(routeCases)) {
       out[lang][name] = renderToString(
         <MemoryRouter initialEntries={[route]}>
-          <App initialLang={lang} />
+          <App initialLang={lang} initialSession={SESSION} />
         </MemoryRouter>,
       )
     }
@@ -397,7 +416,9 @@ try {
       }
 
       // EVERY route carries the header logo + the persistent disclaimer
-      for (const name of ['home', 'upload', 'review', 'language', 'timetable']) {
+      const allRoutes = ['home', 'upload', 'review', 'language', 'timetable',
+        'login', 'reminders', 'agent']
+      for (const name of allRoutes) {
         check(r[name].includes('MedRecall'), `${name} (${lang}): missing header/logo`)
         check(r[name].includes(DIS[lang]), `${name} (${lang}): missing persistent disclaimer`)
       }
@@ -407,8 +428,13 @@ try {
       expectIn('review', [UI3[lang].loading]) // data loads in useEffect (client only)
       expectIn('language', [UI3[lang].langTitle, UI3[lang].seeTimetable, 'English', 'தமிழ்', 'हिन्दी'])
       expectIn('timetable', [UI3[lang].loading])
+      // Phase 7 routes: auth + reminders + agent
+      expectIn('login', [UI3[lang].loginTitle, UI3[lang].phoneLabel, UI3[lang].loginIntro])
+      expectIn('reminders', [UI3[lang].remindersTitle, UI3[lang].consentTitle,
+        UI3[lang].upcomingTitle, UI3[lang].historyTitle])
+      expectIn('agent', [UI3[lang].agentTitle, UI3[lang].agentIntro, UI3[lang].agentSend])
     }
-    console.log('   OK — Home/Upload/Review/Language/Timetable render in en/ta/hi')
+    console.log('   OK — Home/Upload/Review/Language/Timetable/Login/Reminders/Agent render in en/ta/hi')
   }
   console.log('   OK — components rendered in en/ta/hi; doseKey convention intact')
 } catch (error) {

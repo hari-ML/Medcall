@@ -13,13 +13,16 @@ guess**. Everything else (Tamil UI, timetable, PDF) is the payoff.
 2. **Frontend:** `cd frontend && npm run dev` → open **http://localhost:5173**
 3. Browser zoom **110 %**, light theme, one clean tab. Second tab empty (for the PDF).
 4. Optional clean slate: DevTools console → `localStorage.clear()` (resets "taken"
-   marks and the remembered prescription).
-5. Sanity check: Home loads and the footer disclaimer is visible.
-6. Have `sample_data/rx.png` open on your desktop **only** if you plan the live
+   marks, the remembered prescription **and the session** — you will sign in again).
+5. **Sign in** on `/login`: type any phone (e.g. `+91 98765 43210`) → **Send code**
+   → the dev code appears on screen (autofilled) → **Verify & continue**.
+6. Sanity check: Home loads and the footer disclaimer is visible.
+7. Have `sample_data/rx.png` open on your desktop **only** if you plan the live
    OCR variant (it adds ~10 s — not recommended inside a strict 2‑minute slot).
 
 > **Fallback:** if anything misbehaves, the demo button path below needs only the
-> backend. You can also run `POST /api/demo` with curl and open `/review/{id}`.
+> backend. You can also run `POST /api/demo` with curl and open `/review/{id}`
+> (the browser needs the sign-in step first; curl needs the Bearer token).
 
 ---
 
@@ -35,6 +38,9 @@ Point at the footer: *"MedRecall explains. It never prescribes. Always confirm
 with your doctor or pharmacist."*
 
 ### 0:15 – 0:35 · Home → Demo
+- (If the tab is fresh) sign in first: **/login** → phone → **Send code** → the
+  dev code is on screen → **Verify & continue** — *"(dev mode shows the code; in
+  production it arrives by SMS)"*.
 - Click **⚡ Try demo prescription**.
 - **Say:** *"A demo prescription so we don't depend on the venue Wi‑Fi. Three
   lines are clear; one is not."*
@@ -87,6 +93,7 @@ with your doctor or pharmacist."*
 | Time | Step | Click |
 |---|---|---|
 | 0:00 | Problem + promise | — |
+| 0:15 | Sign in (if fresh tab) | /login → Send code → Verify |
 | 0:15 | Demo | ⚡ Try demo prescription |
 | 0:35 | Safety moment | ✏️ Edit manually → `10 mg` → Save |
 | 1:05 | Language | Generate → தமிழ் → See my timetable |
@@ -131,4 +138,5 @@ with your doctor or pharmacist."*
 localStorage.clear()
 ```
 
-Then reload — Home shows a clean state and the next demo starts fresh.
+Then reload — Home shows a clean state (you'll be sent to `/login` to sign in
+again, since the session is in localStorage too) and the next demo starts fresh.

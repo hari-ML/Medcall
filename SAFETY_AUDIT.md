@@ -8,7 +8,7 @@ Unclear lines are **never translated, never scheduled, never printed, never used
 for reminders, and never given a dose or time by the care agent** until a human
 confirms or edits them.
 
-Audited: 2026-11-07 · version 0.1.0 · decision: **PASS**
+Audited: 2026-11-10 · version 0.2.0 · decision: **PASS**
 
 ---
 
@@ -19,9 +19,9 @@ Audited: 2026-11-07 · version 0.1.0 · decision: **PASS**
 | Static enforcement chain | `node scripts/safety_audit.mjs` | ✅ 13 areas, all enforced |
 | Live adversarial API audit | `node scripts/safety_audit.mjs` | ✅ 14 scenarios, **149 checks, 0 failures** |
 | Backend test suite | `cd backend && pytest` | ✅ **390 passed, 0 failed** |
-| Frontend render + i18n audit | `node scripts/frontend_verify.mjs` | ✅ **195 checks, 0 failures** |
+| Frontend render + i18n audit | `node scripts/frontend_verify.mjs` | ✅ **252 checks, 0 failures** |
 | Live API contract (pages' data) | `node scripts/api_contract.mjs` | ✅ **216 checks, 0 failures** |
-| Production build | `cd frontend && npm run build` | ✅ 107 modules, 271 kB JS |
+| Production build | `cd frontend && npm run build` | ✅ 111 modules, 297 kB JS |
 
 Statuses observed across every audit run: `clear`, `unclear`, `confirmed`,
 `edited` — **nothing outside that vocabulary was ever produced**.
@@ -43,7 +43,7 @@ layers each enforce it, so a bug in one cannot leak an unclear line:
 | 6 | **API transitions** | The only status writes are confirm → `confirmed` and edit → `edited` (gate passed) or `unclear` (still incomplete). No route assigns `clear` | `backend/app/routers/prescriptions.py` | audit A6/B3–B9 · `test_status_never_becomes_clear_through_api` |
 | 7 | **Input schema** | `action` is a literal `confirm \| edit`; the edit schema has **no** `status` field, so clients cannot inject one | `backend/app/schemas.py` | audit A7/B3–B6 (5 injection attempts) |
 | 8 | **Demo + seed** | Demo data and CLI seeding run the same extract → parse → gate pipeline — no hand-written "clear" fixtures | `backend/app/seed.py` | audit A8/B1 · `test_demo_returns_prefilled_prescription` |
-| 9 | **Frontend** | The UI never assigns a status or builds instructions; it renders backend data and shows "We won't guess" on unclear lines. Generate is blocked while lines are pending unless the user explicitly chooses *schedule only confirmed items* | `frontend/src` | audit A9 · frontend verify (SSR of all pages) |
+| 9 | **Frontend** | The UI never assigns a status or builds instructions; it renders backend data and shows "We won't guess" on unclear lines. Generate is blocked while lines are pending unless the user explicitly chooses *schedule only confirmed items*. Phase 7 added the login/reminder/agent screens: `/login` is the only public route, every other route renders behind `RequireAuth`, and the Reminders/Agent pages only ever *display* backend rows (consent stays default-deny; the agent always shows the backend disclaimer) | `frontend/src` | audit A9 · frontend verify (SSR of all 8 routes × 3 languages) |
 | 10 | **Disclaimer** | Persistent footer on every route, on the printed PDF, and in every schedule payload — in English, Tamil and Hindi | `App.jsx`, `Disclaimer.jsx`, `pdf.py`, `translate.py` | audit A10 · frontend verify (every route × 3 languages) |
 | 11 | **Reminder dispatch** | Enrollment skips unclear/as-needed/no-slot items. Right before **every** send the dispatcher re-checks: schedule active, item scheduleable, not SOS/PRN, inside the grace window, explicit per-channel consent. No consent → `blocked`; unconfigured provider → `failed` (never "sent") | `backend/app/reminders.py`, `backend/app/channels/` | audit A11/B12 · `tests/test_reminders.py` |
 | 12 | **Care agent** | Read-only. Answers from the same `build_schedule`; names unclear items but never gives their dose/time; describes SOS items as having no fixed time; refuses dose changes, interactions and diagnosis; escalates symptoms/emergencies. The optional LLM gets verified context only and its answer is rejected unless every number/unit/time is already verified | `backend/app/agent/` | audit A12/B13 · `tests/test_agent.py` |
@@ -98,7 +98,7 @@ uvicorn app.main:app            # http://localhost:8000
 # terminal 2 — audit (from the repo root)
 node scripts/safety_audit.mjs    # 149 checks: static chain + live adversarial
 node scripts/api_contract.mjs    # 216 checks: every payload the UI consumes
-node scripts/frontend_verify.mjs # 195 checks: bundle, i18n, SSR of all routes
+node scripts/frontend_verify.mjs # 252 checks: bundle, i18n, SSR of all 8 routes
 cd backend && pytest             # 390 tests
 
 # production build
@@ -124,7 +124,7 @@ never toward guessing:
 | Translation is **phrase-based** (offline, deterministic) | less fluent than an LLM/medical translator | Every phrase is fixed and reviewed; it explains instructions, it does not interpret medical intent. |
 | The care agent's LLM fallback is **optional** and still fallible | a rephrased answer could be awkward or incomplete | It only runs for unmatched questions, receives verified data only, and any answer with an unverified number/unit/time is rejected in favour of the deterministic reply. It never diagnoses or prescribes. |
 | **No drug-interaction or dosage-appropriateness checks** | not a clinical decision tool | Out of scope by design: that is the doctor's / pharmacist's job. The agent explicitly refuses these questions. |
-| Taken marks and last-opened prescription live in **localStorage** | clearing browser data resets them | Prescription/account data itself lives in the backend SQLite DB behind phone-OTP auth. |
+| Taken marks, last-opened prescription, language and the session live in **localStorage** | clearing browser data resets them and signs the user out | Prescription/account data itself lives in the backend SQLite DB behind phone-OTP auth; the server session ends with the refresh cookie either way. |
 | SQLite + phone-OTP auth; **dev mode echoes the OTP** | not a production SMS flow | Production refuses dev-mode OTP echoes with `503` until a real SMS provider is configured; set a real `MEDRECALL_SECRET_KEY`. |
 | Only `eng + tam + hin` OCR packs | other scripts fall back to English | `GET /api/health` reports exactly which packs are available. |
 | Noto fonts for Tamil/Hindi PDFs are optional | PDF falls back to English with a note | Never crashes; never silently prints garbled glyphs. |

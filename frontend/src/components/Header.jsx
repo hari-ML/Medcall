@@ -1,5 +1,6 @@
 import React from 'react'
 import { Link, NavLink } from 'react-router-dom'
+import { useAuth } from '../auth'
 import { LANGS, useI18n } from '../i18n'
 
 /** Teal capsule logo mark (pure SVG, no image assets needed). */
@@ -20,11 +21,17 @@ function LogoMark() {
 }
 
 /**
- * Persistent navbar: logo + app name, Home link and the language switcher
- * (English / தமிழ் / हिन्दी) — the chosen language drives the whole UI.
+ * Persistent navbar: logo + app name, nav links (Home / Reminders / Ask),
+ * sign-in or sign-out, and the language switcher (English / தமிழ் / हिन्दी).
  */
 export default function Header() {
   const { lang, setLang, t } = useI18n()
+  const { isAuthed, patient, logout } = useAuth()
+
+  const navLinkClass = ({ isActive }) =>
+    `rounded-xl px-3 py-2 text-lg font-semibold transition-colors ${
+      isActive ? 'bg-brand-50 text-brand-800' : 'text-slate-600 hover:bg-slate-100'
+    }`
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white shadow-sm">
@@ -43,20 +50,36 @@ export default function Header() {
           </span>
         </Link>
 
-        <div className="flex items-center gap-4">
-          <nav aria-label="Main">
-            <NavLink
-              to="/"
-              end
-              className={({ isActive }) =>
-                `rounded-xl px-4 py-2 text-lg font-semibold transition-colors ${
-                  isActive ? 'bg-brand-50 text-brand-800' : 'text-slate-600 hover:bg-slate-100'
-                }`
-              }
-            >
+        <div className="flex items-center gap-2">
+          <nav aria-label="Main" className="flex flex-wrap items-center gap-1">
+            <NavLink to="/" end className={navLinkClass}>
               {t('home')}
             </NavLink>
+            <NavLink to="/reminders" className={navLinkClass}>
+              🔔 {t('navReminders')}
+            </NavLink>
+            <NavLink to="/agent" className={navLinkClass}>
+              💬 {t('navAgent')}
+            </NavLink>
           </nav>
+
+          {isAuthed ? (
+            <button
+              type="button"
+              onClick={() => logout()}
+              className="rounded-xl bg-slate-100 px-3 py-2 text-base font-semibold text-slate-600 transition-colors hover:bg-slate-200"
+              title={t('signedInAs', { phone: patient?.phone || '' })}
+            >
+              ⎋ {t('signOut')}
+            </button>
+          ) : (
+            <Link
+              to="/login"
+              className="rounded-xl bg-brand-700 px-3 py-2 text-base font-semibold text-white transition-colors hover:bg-brand-800"
+            >
+              {t('signIn')}
+            </Link>
+          )}
 
           <div
             className="flex items-center gap-1 rounded-full bg-slate-100 p-1"
