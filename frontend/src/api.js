@@ -58,6 +58,12 @@ client.interceptors.response.use(
 export function errorMessage(error) {
   const detail = error?.response?.data?.detail
   if (typeof detail === 'string' && detail.trim()) return detail
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    // Structured auth errors: {"code": "...", "message": "...", "retry_after": 30}
+    const message = detail.message
+    if (typeof message === 'string' && message.trim()) return message
+    return null
+  }
   if (Array.isArray(detail) && detail.length) {
     // fastapi validation errors: [{loc, msg, ...}]
     return detail.map((d) => d?.msg || '').filter(Boolean).join('; ') || null
@@ -66,12 +72,30 @@ export function errorMessage(error) {
   return null
 }
 
+/** Machine-readable auth error code (auth endpoints only), or ''. */
+export function errorCode(error) {
+  const detail = error?.response?.data?.detail
+  return detail && typeof detail === 'object' && !Array.isArray(detail)
+    ? String(detail.code || '')
+    : ''
+}
+
+/** Raw structured detail object (attempts_left, retry_after…), or null. */
+export function errorDetail(error) {
+  const detail = error?.response?.data?.detail
+  return detail && typeof detail === 'object' && !Array.isArray(detail) ? detail : null
+}
+
 export class ApiError extends Error {
   constructor(message, status, raw) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.raw = raw
+    this.code = errorCode(raw)
+    this.detail = errorDetail(raw)
+    this.retryAfter = Number(this.detail?.retry_after || 0)
+    this.attemptsLeft = this.detail?.attempts_left
   }
 }
 
@@ -183,8 +207,33 @@ export async function getHealth() {
 export const UPLOADS_BASE = '/uploads'
 
 // ---------------------------------------------------------------------------
-// Auth (Phase 7): phone + OTP login, session refresh, profile, consent
+// Auth (Phase 7): phone + OTP login, registration, session refresh, profile
 // ---------------------------------------------------------------------------
+
+/**
+ * Create an account (or reclaim an unverified one) and send the first code.
+ * 201 = created, 200 = reclaimed, 409 = already registered, 503 = no channel.
+ */
+export async function registerAccount({
+  phone,
+  full_name: fullName,
+  preferred_lang: preferredLang = 'en',
+  preferred_channel: preferredChannel = 'whatsapp',
+  caregiver_phone: caregiverPhone,
+}) {
+  try {
+    const response = await client.post('/auth/register', {
+      phone,
+      full_name: fullName,
+      preferred_lang: preferredLang,
+      preferred_channel: preferredChannel,
+      ...(caregiverPhone ? { caregiver_phone: caregiverPhone } : {}),
+    })
+    return response.data
+  } catch (error) {
+    throwApiError(error)
+  }
+}
 
 /** Request a one-time code (dev mode returns it as `dev_code`). */
 export async function requestOtp(phone) {
@@ -312,6 +361,19 @@ export async function getHistory() {
 export async function runReminders() {
   try {
     const response = await client.post('/reminders/run')
+    return response.data
+  } catch (error) {
+    throwApiError(error)
+  }
+}
+
+/**
+ * Send one real test message over a consented channel.
+ * 403 = consent required, 502 = provider not configured/failed.
+ */
+export async function sendTestReminder(channel) {
+  try {
+    const response = await client.post('/reminders/test', channel ? { channel } : {})
     return response.data
   } catch (error) {
     throwApiError(error)

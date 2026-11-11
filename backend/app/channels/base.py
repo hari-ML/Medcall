@@ -45,6 +45,31 @@ def is_transient_status(status_code: int) -> bool:
     return status_code == 429 or status_code >= 500
 
 
+@dataclass
+class InteractiveButton:
+    """One reply button on an outbound interactive message.
+
+    ``id`` is an opaque callback token for the inbound webhook (e.g.
+    ``TAKEN_123``); ``title`` is the short label shown to the patient
+    (WhatsApp limit: 20 characters).
+    """
+
+    id: str
+    title: str
+
+
+@dataclass
+class InteractiveMessage:
+    """Structured reply actions accompanying an outbound message.
+
+    Adapters stay dumb pipes: the dispatcher builds both the exact body text
+    and these actions from the verified timetable. A button id references a
+    reminder occurrence — it never carries medical content of its own.
+    """
+
+    buttons: list[InteractiveButton]
+
+
 def provider_error_message(provider: str, response: httpx.Response) -> str:
     """A short, secret-free error string for the occurrence row.
 
@@ -114,10 +139,32 @@ class ChannelAdapter(ABC):
         """True when this adapter can actually deliver right now."""
 
     @abstractmethod
-    def send(self, to_phone: str, body: str, *, lang: str = "en") -> DeliveryResult:
+    def send(
+        self,
+        to_phone: str,
+        body: str,
+        *,
+        lang: str = "en",
+        interactive: InteractiveMessage | None = None,
+    ) -> DeliveryResult:
         """Deliver ``body`` to ``to_phone``; raise on failure.
 
         ``lang`` is used only for provider-side voice/template selection.
+        ``interactive`` carries structured reply buttons for channels that
+        support them (WhatsApp); plain-SMS/voice adapters ignore it.
         Implementations must never invent or modify the message content —
         the dispatcher builds it from the verified timetable.
         """
+
+    def send_otp(self, to_phone: str, code: str, *, lang: str = "en") -> DeliveryResult:
+        """Deliver a 6-digit login code as a plain transactional message.
+
+        Generic, adapter-agnostic copy (no medical content), so it lives on
+        the base class; providers may override it — WhatsApp sends the code
+        as an approved-template parameter when a template is configured.
+        """
+        body = (
+            f"MedRecall verification code: {code}. "
+            "It expires in 10 minutes. Never share it with anyone."
+        )
+        return self.send(to_phone, body, lang=lang)

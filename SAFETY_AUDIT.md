@@ -17,11 +17,11 @@ Audited: 2026-11-10 · version 0.2.0 · decision: **PASS**
 | Verification | Command | Result |
 |---|---|---|
 | Static enforcement chain | `node scripts/safety_audit.mjs` | ✅ 13 areas, all enforced |
-| Live adversarial API audit | `node scripts/safety_audit.mjs` | ✅ 14 scenarios, **149 checks, 0 failures** |
-| Backend test suite | `cd backend && pytest` | ✅ **390 passed, 0 failed** |
+| Live adversarial API audit | `node scripts/safety_audit.mjs` | ✅ 14 scenarios, **150 checks, 0 failures** |
+| Backend test suite | `cd backend && pytest` | ✅ **394 passed, 0 failed** |
 | Frontend render + i18n audit | `node scripts/frontend_verify.mjs` | ✅ **252 checks, 0 failures** |
 | Live API contract (pages' data) | `node scripts/api_contract.mjs` | ✅ **216 checks, 0 failures** |
-| Production build | `cd frontend && npm run build` | ✅ 111 modules, 297 kB JS |
+| Production build | `cd frontend && npm run build` | ✅ 113 modules, 329 kB JS |
 
 Statuses observed across every audit run: `clear`, `unclear`, `confirmed`,
 `edited` — **nothing outside that vocabulary was ever produced**.
@@ -95,11 +95,15 @@ of `sample_data/rx.png` — 4 lines extracted, 3 `clear`, 1 `unclear`
 cd backend
 uvicorn app.main:app            # http://localhost:8000
 
-# terminal 2 — audit (from the repo root)
-node scripts/safety_audit.mjs    # 149 checks: static chain + live adversarial
+# terminal 2 — audit (from the repo root). The B14 admin scenario must see the
+# SAME admin credential the server uses, or set neither (fail-closed 503 branch):
+$env:MEDRECALL_API="http://127.0.0.1:8000"
+$env:MEDRECALL_ADMIN_USERNAME="..."   # same as the server, or unset
+$env:MEDRECALL_ADMIN_PASSWORD="..."
+node scripts/safety_audit.mjs    # 150 checks: static chain + live adversarial
 node scripts/api_contract.mjs    # 216 checks: every payload the UI consumes
-node scripts/frontend_verify.mjs # 252 checks: bundle, i18n, SSR of all 8 routes
-cd backend && pytest             # 390 tests
+node scripts/frontend_verify.mjs # 252 checks: bundle, i18n, SSR of all routes
+cd backend && pytest             # 394 tests
 
 # production build
 cd frontend && npm run build

@@ -25,6 +25,7 @@ from .base import (
     ChannelDeliveryError,
     ChannelNotConfigured,
     DeliveryResult,
+    InteractiveMessage,
     post_provider,
 )
 
@@ -47,9 +48,41 @@ class WhatsAppAdapter(ChannelAdapter):
             and self.settings.whatsapp_phone_number_id.strip()
         )
 
-    def _payload(self, to_phone: str, body: str) -> dict[str, Any]:
+    def _payload(
+        self,
+        to_phone: str,
+        body: str,
+        interactive: InteractiveMessage | None = None,
+    ) -> dict[str, Any]:
         # WhatsApp expects digits with the country code, no leading "+".
         to = re.sub(r"\D", "", to_phone)
+
+        # Real interactive dose reminder: up to three reply buttons whose ids
+        # (TAKEN_<id> / SNOOZE_<id> / HELP_<id>) come back through the inbound
+        # webhook. The body is the dispatcher's exact text, unchanged.
+        if interactive and interactive.buttons:
+            buttons = []
+            for button in interactive.buttons[:3]:
+                buttons.append(
+                    {
+                        "type": "reply",
+                        "reply": {
+                            "id": button.id[:256],
+                            "title": button.title[:20],
+                        },
+                    }
+                )
+            return {
+                "messaging_product": "whatsapp",
+                "to": to,
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {"text": body},
+                    "action": {"buttons": buttons},
+                },
+            }
+
         template = self.settings.whatsapp_template_name.strip()
         if template:
             return {
@@ -75,7 +108,7 @@ class WhatsAppAdapter(ChannelAdapter):
             "text": {"preview_url": False, "body": body},
         }
 
-    def send(self, to_phone: str, body: str, *, lang: str = "en") -> DeliveryResult:
+    def _post(self, to_phone: str, payload: dict[str, Any]) -> DeliveryResult:
         if not self.configured:
             raise ChannelNotConfigured(
                 "WhatsApp Cloud API is not configured "
@@ -96,7 +129,7 @@ class WhatsAppAdapter(ChannelAdapter):
                 "Authorization": f"Bearer {self.settings.whatsapp_token}",
                 "Content-Type": "application/json",
             },
-            json=self._payload(to_phone, body),
+            json=payload,
         )
 
         try:
@@ -114,3 +147,22 @@ class WhatsAppAdapter(ChannelAdapter):
                 "WhatsApp response did not include a message id", transient=False
             )
         return DeliveryResult(message_id=message_id, channel=self.name)
+
+    def send(
+        self,
+        to_phone: str,
+        body: str,
+        *,
+        lang: str = "en",
+        interactive: InteractiveMessage | None = None,
+    ) -> DeliveryResult:
+        return self._post(to_phone, self._payload(to_phone, body, interactive))
+
+    def send_otp(self, to_phone: str, code: str, *, lang: str = "en") -> DeliveryResult:
+        """Real 6-digit OTP: approved template parameter when a template is
+        configured (business-initiated messages outside the 24-hour window
+        require one), otherwise a free-form text message."""
+        if self.configured and self.settings.whatsapp_template_name.strip():
+            # template mode sends its single {{1}} parameter verbatim
+            return self.send(to_phone, code, lang=lang)
+        return super().send_otp(to_phone, code, lang=lang)

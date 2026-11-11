@@ -22,6 +22,7 @@ from .base import (
     ChannelDeliveryError,
     ChannelNotConfigured,
     DeliveryResult,
+    InteractiveMessage,
     post_provider,
 )
 
@@ -49,7 +50,16 @@ class VoiceAdapter(ChannelAdapter):
         say_lang = self.settings.voice_lang_map_dict.get(lang, "en-US")
         return f'<Response><Say language="{say_lang}">{escape(body)}</Say></Response>'
 
-    def send(self, to_phone: str, body: str, *, lang: str = "en") -> DeliveryResult:
+    def send(
+        self,
+        to_phone: str,
+        body: str,
+        *,
+        lang: str = "en",
+        interactive: InteractiveMessage | None = None,
+    ) -> DeliveryResult:
+        """Place the call and read ``body`` verbatim (no reply buttons on a
+        voice call — ``interactive`` is ignored by design)."""
         if not self.configured:
             raise ChannelNotConfigured(
                 "Voice provider is not configured "

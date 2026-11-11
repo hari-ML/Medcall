@@ -138,7 +138,13 @@ def test_alembic_upgrade_head_rebuilds_the_live_schema(tmp_path):
                 if not ix["name"].startswith("sqlite_autoindex")
             )
             out[table] = {
-                "columns": [(c["name"], str(c["type"]), c["nullable"]) for c in insp.get_columns(table)],
+                # Column order is not part of the schema contract: SQLite's
+                # ALTER TABLE ADD COLUMN appends, while the ORM model groups
+                # columns logically. Compare the set of columns semantically.
+                "columns": sorted(
+                    (c["name"], str(c["type"]), c["nullable"])
+                    for c in insp.get_columns(table)
+                ),
                 "pk": insp.get_pk_constraint(table)["constrained_columns"],
                 "fks": fks,
                 "uniques": uqs,

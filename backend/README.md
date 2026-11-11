@@ -47,7 +47,7 @@ real database (`MEDRECALL_DB` is overridden to a temp file by `tests/conftest.py
 
 | Module | Responsibility |
 |---|---|
-| `ocr.py` | file → `OcrLine(text, confidence 0-100)`; OpenCV preprocessing (grayscale → denoise → adaptive threshold, with grayscale retry); tesseract exe auto-discovery; `eng+tam+hin` → `eng` fallback; PDF via pdf2image |
+| `ocr.py` | file → `OcrLine(text, confidence 0-100)`. Primary: **Gemini Vision** (`google-genai`, `gemini-2.5-flash`, `GEMINI_API_KEY`) after **OpenCV shadow removal** (dilation + median-blur background subtraction + normalisation + adaptive-Gaussian threshold) → strict JSON, synthesized into lines by `parser.py`. Fallback (no key): OpenCV preprocessing + Tesseract `eng+tam+hin` → `eng`; PDF via pdf2image |
 | `extract.py` | skip headers (clinic/doctor/date/patient/Rx/advice), pick medicine lines; **never silently drops a line containing a dosage form** |
 | `parser.py` | `medicine_name / strength / form / frequency / food_timing / duration_days`, each with a 0-1 confidence + source fragment; `ABBREVIATIONS`, `SLOT_MAP`, conflict detection |
 | `uncertainty.py` | the gate: `clear | unclear` + human reasons; `SCHEDULEABLE_STATUSES = {clear, confirmed, edited}` |
@@ -64,9 +64,11 @@ real database (`MEDRECALL_DB` is overridden to a temp file by `tests/conftest.py
 | `agent/` | Phase 5 read-only care agent: `context.py` (verified, patient-scoped data via `build_schedule`), `intents.py` (en/ta/hi), `responder.py` (deterministic answers), `llm.py` (optional OpenAI-compatible rephrasing + `is_safe_answer` guard), `service.py` (orchestration) |
 
 Migrations live in `alembic/versions/` — baseline `4fe1831b87e1`, Phase 2
-`c8b4f272dc02`, Phase 3 `c63b9c2fe09c`, Phase 4 `a489a7b88ae5`. Run
-`alembic upgrade head` from `backend/` before starting against an existing
-database.
+`c8b4f272dc02`, Phase 3 `c63b9c2fe09c`, Phase 4 `a489a7b88ae5`, MedRecall 2.0
+`b7d21e4a9c30` (adds `patients.preferred_channel`,
+`reminder_occurrences.patient_action(_at)`; `init_db()` backfills the three
+columns for `create_all` DBs). Run `alembic upgrade head` from `backend/`
+before starting against an existing database.
 
 ## Environment variables
 

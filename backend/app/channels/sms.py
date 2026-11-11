@@ -15,6 +15,7 @@ from .base import (
     ChannelDeliveryError,
     ChannelNotConfigured,
     DeliveryResult,
+    InteractiveMessage,
     post_provider,
 )
 
@@ -38,7 +39,20 @@ class SmsAdapter(ChannelAdapter):
             and self.settings.sms_from.strip()
         )
 
-    def send(self, to_phone: str, body: str, *, lang: str = "en") -> DeliveryResult:
+    def send(
+        self,
+        to_phone: str,
+        body: str,
+        *,
+        lang: str = "en",
+        interactive: InteractiveMessage | None = None,
+    ) -> DeliveryResult:
+        """Send ``body`` as a carrier SMS.
+
+        Plain SMS has no reply buttons — when the dispatcher is delivering to
+        SMS it appends the TAKEN/SNOOZE/SKIP/HELP reply instructions to the
+        body itself (``interactive`` is ignored here by design).
+        """
         if not self.configured:
             raise ChannelNotConfigured(
                 "SMS provider is not configured "

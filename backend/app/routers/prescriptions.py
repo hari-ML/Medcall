@@ -29,7 +29,7 @@ from ..core.deps import get_current_patient
 from ..core.security import sign_image_url
 from ..db import get_db
 from ..models import Patient, Prescription
-from ..ocr import OcrError, ocr_file
+from ..ocr import OcrError, ocr_bundle
 from ..parser import parse_line
 from ..pdf import render_timetable_pdf
 from ..reminders import sync_item_schedules
@@ -64,14 +64,15 @@ def _ocr_and_create(
     patient_id: int | None = None,
 ):
     """OCR + persist in a worker thread (keeps the event loop responsive)."""
-    ocr_lines = ocr_file(path, is_pdf=is_pdf)
+    bundle = ocr_bundle(path, is_pdf=is_pdf)
     return create_prescription_from_ocr(
         db,
-        ocr_lines,
+        bundle.lines,
         image_filename=image_filename,
         original_filename=original_filename,
         content_type=content_type,
         patient_id=patient_id,
+        structured=[row.as_dict() for row in bundle.structured],
     )
 
 

@@ -11,11 +11,11 @@ function resolveImageUrl(url) {
 }
 
 /**
- * Review screen: the original prescription next to every extracted line so
- * the user can verify them. Unclear lines carry the warning + confirm/edit
- * actions (via MedicineLine). "Generate schedule" is blocked while lines
- * are pending UNLESS the user explicitly chooses "schedule only confirmed
- * items" — MedRecall never guesses either way (the backend excludes
+ * Review screen (Cozy design system): the original prescription next to every
+ * extracted line so the user can verify them. Unclear lines carry the warning
+ * + confirm/edit actions (via MedicineLine). "Generate schedule" is blocked
+ * while lines are pending UNLESS the user explicitly chooses "schedule only
+ * confirmed items" — MedRecall never guesses either way (the backend excludes
  * unclear items from schedule/PDF/reminders regardless).
  */
 export default function Review() {
@@ -83,7 +83,7 @@ export default function Review() {
 
   if (loading) {
     return (
-      <p className="py-16 text-center text-xl text-slate-500" role="status">
+      <p className="py-16 text-center text-sm text-cozy-quiet" role="status">
         {t('loading')}
       </p>
     )
@@ -92,7 +92,7 @@ export default function Review() {
   if (error && !prescription) {
     return (
       <div className="mx-auto max-w-xl space-y-4 text-center">
-        <div role="alert" className="rounded-card border-2 border-red-300 bg-red-50 p-5 text-lg text-red-800">
+        <div role="alert" className="alert-error text-sm">
           {error === '404' ? t('errorGeneric') : error}
         </div>
         <div className="flex justify-center gap-3">
@@ -109,20 +109,26 @@ export default function Review() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <header>
         <Link to="/" className="btn-quiet btn-sm inline-flex">
           ← {t('back')}
         </Link>
-        <h1 className="mt-4 text-3xl font-bold text-slate-800">{t('reviewTitle')}</h1>
-        <p className="mt-2 text-lg text-slate-600">{t('reviewSubtitle')}</p>
-        <div className="mt-3 flex flex-wrap gap-2">
+        <h1 className="mt-5 text-lg font-medium leading-tight text-cozy-white">
+          {t('reviewTitle')}
+        </h1>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-cozy-quiet">
+          {t('reviewSubtitle')}
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
           <span className="chip-ok">✓ {t('linesReady', { n: ready })}</span>
-          {pending > 0 ? <span className="chip-warn">⚠ {t('linesPending', { n: pending })}</span> : null}
+          {pending > 0 ? (
+            <span className="chip-warn">! {t('linesPending', { n: pending })}</span>
+          ) : null}
         </div>
-      </div>
+      </header>
 
       {error ? (
-        <div role="alert" className="rounded-card border-2 border-red-300 bg-red-50 p-4 text-lg text-red-800">
+        <div role="alert" className="alert-error text-sm">
           {error}
         </div>
       ) : null}
@@ -130,19 +136,19 @@ export default function Review() {
       <div className="grid gap-6 lg:grid-cols-2">
         {/* original image — the reference for verification */}
         <section className="lg:sticky lg:top-24 lg:self-start">
-          <h2 className="mb-2 text-xl font-bold text-slate-800">{t('originalImage')}</h2>
+          <h2 className="mb-3 text-base font-medium text-cozy-white">{t('originalImage')}</h2>
           {resolveImageUrl(prescription?.image_url) ? (
             <img
               src={resolveImageUrl(prescription.image_url)}
               alt={t('originalImage')}
-              className="w-full rounded-card border border-slate-200 bg-white shadow-sm"
+              className="w-full rounded-lg border border-cozy-border bg-cozy-card shadow-md"
             />
           ) : null}
         </section>
 
         {/* extracted lines */}
         <section>
-          <h2 className="mb-3 text-xl font-bold text-slate-800">{t('extractedLines')}</h2>
+          <h2 className="mb-3 text-base font-medium text-cozy-white">{t('extractedLines')}</h2>
           <div className="space-y-5">
             {items.map((item) => (
               <MedicineLine
@@ -153,7 +159,7 @@ export default function Review() {
               />
             ))}
             {items.length === 0 ? (
-              <p className="rounded-card bg-white p-6 text-lg text-slate-500">{t('noMedicines')}</p>
+              <p className="card text-sm text-cozy-quiet">{t('noMedicines')}</p>
             ) : null}
           </div>
         </section>
@@ -162,10 +168,10 @@ export default function Review() {
       {/* generate action */}
       <section className="card">
         {pending > 0 ? (
-          <label className="mb-4 flex cursor-pointer items-start gap-3 text-lg text-slate-700">
+          <label className="mb-4 flex cursor-pointer items-start gap-3 text-sm text-cozy-quiet">
             <input
               type="checkbox"
-              className="mt-1 h-5 w-5 accent-brand-600"
+              className="mt-1 h-5 w-5 accent-cozy-white"
               checked={onlyConfirmed}
               onChange={(event) => setOnlyConfirmed(event.target.checked)}
             />
@@ -174,8 +180,8 @@ export default function Review() {
         ) : null}
 
         {!canGenerate ? (
-          <p className="mb-4 rounded-xl bg-amber-50 p-3 text-lg font-medium text-amber-800">
-            ⚠ {t('resolveFirst')}
+          <p className="mb-4 rounded-md border border-cozy-white bg-cozy-card p-4 text-sm font-medium text-cozy-white">
+            ! {t('resolveFirst')}
           </p>
         ) : null}
 

@@ -83,6 +83,7 @@ def _patient_out(patient: Patient) -> PatientOut:
         phone_verified=patient.phone_verified,
         full_name=patient.full_name,
         preferred_lang=patient.preferred_lang,
+        preferred_channel=patient.preferred_channel,
         timezone=patient.timezone,
         caregiver_name=patient.caregiver_name,
         caregiver_phone=patient.caregiver_phone,

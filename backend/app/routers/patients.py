@@ -72,7 +72,13 @@ def update_me(
             ) from None
         patient.timezone = tz
 
-    for field in ("full_name", "preferred_lang", "caregiver_name", "caregiver_phone"):
+    for field in (
+        "full_name",
+        "preferred_lang",
+        "preferred_channel",
+        "caregiver_name",
+        "caregiver_phone",
+    ):
         if data.get(field) is not None:
             setattr(patient, field, str(data[field]).strip())
 

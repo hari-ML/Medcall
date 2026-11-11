@@ -112,6 +112,10 @@ class Patient(Base):
 
     #: preferred UI/instruction language
     preferred_lang: Mapped[str] = mapped_column(String(5), default="en", nullable=False)
+    #: preferred reminder/OTP channel chosen at registration: whatsapp | sms
+    preferred_channel: Mapped[str] = mapped_column(
+        String(16), default="whatsapp", nullable=False
+    )
     #: IANA timezone for reminder scheduling (Phase 3)
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata", nullable=False)
 
@@ -280,5 +284,12 @@ class ReminderOccurrence(Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True, index=True
     )
+    #: patient's reply action recorded by the inbound webhooks (Part 3):
+    #: "" | taken | snoozed | skipped | help — the *status* vocabulary above
+    #: is deliberately unchanged (webhooks record actions, never invent
+    #: delivery states).
+    patient_action: Mapped[str] = mapped_column(String(16), default="", nullable=False)
+    #: naive UTC of the patient's reply action
+    patient_action_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     schedule: Mapped["ReminderSchedule"] = relationship()

@@ -23,6 +23,7 @@ NOT owned here (unchanged behaviour):
 
 from __future__ import annotations
 
+import os
 import secrets
 from functools import lru_cache
 from pathlib import Path
@@ -83,6 +84,15 @@ class Settings(BaseSettings):
     #: "fake" (development default) records sends instead of contacting a
     #: provider; production always uses real adapters (unconfigured -> failed)
     channel_mode: str = Field(default="fake", alias="MEDRECALL_CHANNEL_MODE")
+    #: Provider selection (Part 3):
+    #:   auto (default) — real provider when configured, fake only in
+    #:                   development when nothing is configured
+    #:   live           — always the real provider (OTP/reminders go out over
+    #:                   WhatsApp/Twilio; unconfigured = honest failure)
+    #:   fake           — dev/test recording channel; impossible in production
+    #: The plain ``CHANNEL_PROVIDER`` environment variable is honoured as an
+    #: alias override (``CHANNEL_PROVIDER=live``).
+    channel_provider: str = Field(default="auto", alias="MEDRECALL_CHANNEL_PROVIDER")
 
     # --- Delivery providers (Phase 4) --------------------------------------
     http_timeout_seconds: float = Field(
@@ -127,6 +137,29 @@ class Settings(BaseSettings):
     twilio_api_base: str = Field(
         default="https://api.twilio.com", alias="MEDRECALL_TWILIO_API_BASE"
     )
+
+    # --- Gemini Vision OCR (Part 3) -----------------------------------------
+    #: Google AI Studio API key (env name GEMINI_API_KEY, the SDK convention).
+    #: Empty = Gemini is skipped and the preprocessed Tesseract pipeline runs
+    #: (the historic fallback — uploads never depend on the key being set).
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-2.5-flash", alias="MEDRECALL_GEMINI_MODEL")
+    gemini_timeout_seconds: float = Field(
+        default=30.0, alias="MEDRECALL_GEMINI_TIMEOUT_SECONDS"
+    )
+
+    # --- Bidirectional webhooks (Part 3) ------------------------------------
+    #: Meta dashboard verification token for GET /api/webhooks/whatsapp.
+    #: Empty = verification always fails (fail closed).
+    whatsapp_verify_token: str = Field(default="", alias="MEDRECALL_WHATSAPP_VERIFY_TOKEN")
+    #: Meta app secret for X-Hub-Signature-256 validation of inbound posts.
+    #: Empty = signature validation is skipped (development).
+    whatsapp_app_secret: str = Field(default="", alias="MEDRECALL_WHATSAPP_APP_SECRET")
+    #: Public https base of this deployment (https://host) — used to verify
+    #: Twilio's X-Twilio-Signature on inbound POSTs. Empty = skip validation.
+    public_base_url: str = Field(default="", alias="MEDRECALL_PUBLIC_BASE_URL")
+    #: how far a "SNOOZE" reply pushes the next reminder (minutes)
+    webhook_snooze_minutes: int = Field(default=30, alias="MEDRECALL_WEBHOOK_SNOOZE_MINUTES")
 
     # --- AI care agent (Phase 5) -------------------------------------------
     #: "none" (deterministic answers only, default) or "openai" for any
@@ -178,6 +211,24 @@ class Settings(BaseSettings):
     @property
     def use_fake_channels(self) -> bool:
         return self.channel_mode.strip().lower() == "fake" and not self.is_production
+
+    @property
+    def effective_channel_provider(self) -> str:
+        """Resolved provider mode: ``live`` | ``fake`` | ``auto``.
+
+        The plain ``CHANNEL_PROVIDER`` env var wins (spec naming), then
+        ``MEDRECALL_CHANNEL_PROVIDER``. Production can never resolve to
+        ``fake`` — a simulated channel must be impossible where real patients
+        live (see also :attr:`use_fake_channels`).
+        """
+        raw = (
+            os.environ.get("CHANNEL_PROVIDER") or self.channel_provider or "auto"
+        ).strip().lower()
+        if raw not in {"auto", "live", "fake"}:
+            raw = "auto"
+        if self.is_production and raw == "fake":
+            raw = "live"
+        return raw
 
 
 _dev_key: str | None = None

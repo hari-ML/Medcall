@@ -1,13 +1,6 @@
 import React from 'react'
 import { SLOT_NAMES, useI18n } from '../i18n'
 
-const SLOT_ICONS = {
-  morning: '☀️',
-  afternoon: '🌤️',
-  evening: '🌇',
-  night: '🌙',
-}
-
 /**
  * Unique key for one scheduled dose (one medicine in one slot on one day).
  * The SAME key convention is used by store.js (Mark-as-taken persistence),
@@ -35,25 +28,29 @@ export default function DoseCard({ slot, time, entries = [], taken = {}, onToggl
 
   return (
     <section className="card flex flex-col">
-      <header className="flex items-center justify-between gap-2 border-b border-slate-100 pb-3">
-        <h3 className="flex items-center gap-2 text-xl font-bold text-slate-800">
-          <span aria-hidden="true">{SLOT_ICONS[slot] || '⏰'}</span>
+      <header className="flex items-center justify-between gap-2 border-b border-cozy-border pb-3">
+        <h3 className="flex items-center gap-2 text-base font-medium text-cozy-white">
+          <span aria-hidden="true" className="h-2 w-2 rounded-full bg-cozy-white" />
           {slotName}
         </h3>
-        {time ? <span className="chip-teal">{t('time')} {time}</span> : null}
+        {time ? (
+          <span className="chip-teal">
+            {t('time')} {time}
+          </span>
+        ) : null}
       </header>
 
       {entries.length === 0 ? (
-        <p className="mt-4 text-lg italic text-slate-500">{emptyNote || '—'}</p>
+        <p className="mt-4 text-sm italic text-cozy-subtle">{emptyNote || '—'}</p>
       ) : (
         <ul className="mt-4 flex-1 space-y-4">
           {entries.map((entry) => {
             const key = doseKey(entry)
             const isTaken = Boolean(taken[key])
             return (
-              <li key={key} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-lg font-bold text-slate-800">{entry.medicine}</div>
-                <p className="mt-1 leading-relaxed text-slate-700">{entry.instruction}</p>
+              <li key={key} className="rounded-md border border-cozy-border bg-cozy-elevated p-4">
+                <div className="text-base font-medium text-cozy-white">{entry.medicine}</div>
+                <p className="mt-1 text-sm leading-relaxed text-cozy-quiet">{entry.instruction}</p>
                 {onToggle ? (
                   <button
                     type="button"
@@ -61,8 +58,8 @@ export default function DoseCard({ slot, time, entries = [], taken = {}, onToggl
                     aria-pressed={isTaken}
                     className={
                       isTaken
-                        ? 'mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-base font-semibold text-white shadow-sm hover:bg-emerald-700'
-                        : 'btn-secondary btn-sm mt-3 w-full'
+                        ? 'mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-cozy-borderStrong bg-cozy-secondary px-4 py-2 text-xs font-medium text-cozy-white transition-colors duration-fast ease-cozy hover:bg-cozy-elevated'
+                        : 'btn-primary btn-sm mt-3 w-full'
                     }
                   >
                     ✓ {isTaken ? t('taken') : t('markAsTaken')}

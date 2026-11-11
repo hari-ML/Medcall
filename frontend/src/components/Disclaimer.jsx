@@ -12,12 +12,15 @@ export default function Disclaimer() {
   const { disclaimer } = useI18n()
 
   return (
-    <footer className="mt-10 border-t-4 border-brand-700 bg-brand-50">
+    <footer className="mt-10 border-t border-cozy-border bg-cozy-canvas">
       <div className="mx-auto flex w-full max-w-6xl items-start gap-3 px-4 py-5">
-        <span aria-hidden="true" className="text-2xl">
-          ⚠️
+        <span
+          aria-hidden="true"
+          className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-cozy-white text-xs font-medium text-cozy-white"
+        >
+          !
         </span>
-        <p className="text-lg font-medium leading-relaxed text-brand-900">{disclaimer}</p>
+        <p className="text-sm font-medium leading-relaxed text-cozy-quiet">{disclaimer}</p>
       </div>
     </footer>
   )

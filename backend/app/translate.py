@@ -24,10 +24,18 @@ from .uncertainty import SCHEDULEABLE_STATUSES
 
 SUPPORTED_LANGUAGES = ("en", "ta", "hi")
 
+#: Requested languages without phrase tables map to a supported language.
+#: Telugu ("te") is a first-class *registration/UI preference* (schedule, PDF
+#: and reminders accept it) but has no hand-written medical phrase tables yet
+#: — the medical text falls back to English instead of failing or, worse,
+#: inventing a translation. Genuinely unknown languages still raise.
+FALLBACK_LANGUAGES: dict[str, str] = {"te": "en"}
+
 LANG_NAMES: dict[str, str] = {
     "en": "English",
     "ta": "தமிழ் (Tamil)",
     "hi": "हिन्दी (Hindi)",
+    "te": "తెలుగు (Telugu)",
 }
 
 
@@ -174,13 +182,74 @@ LANGUAGE_PREVIEWS: dict[str, str] = {
     "hi": "खाने के बाद 1 गोली, दिन में तीन बार",
 }
 
+# ---------------------------------------------------------------------------
+# Inbound-reply phrases (WhatsApp / Twilio webhooks, Part 3)
+# ---------------------------------------------------------------------------
+
+#: Appended by the dispatcher to plain-SMS reminders (WhatsApp uses reply
+#: buttons instead). Reply commands never change a dose — they only record
+#: what the patient answered.
+REPLY_HINT: dict[str, str] = {
+    "en": "Reply TAKEN, SNOOZE, SKIP or HELP to this message.",
+    "ta": "இந்தச் செய்திக்கு TAKEN, SNOOZE, SKIP அல்லது HELP என்று பதிலளிக்கவும்.",
+    "hi": "इस संदेश का जवाब TAKEN, SNOOZE, SKIP या HELP से दें।",
+}
+
+#: Acknowledgements for webhook actions (no dose advice of their own — the
+#: SKIP/HELP answers come from the grounded care agent).
+WEBHOOK_ACKS: dict[str, dict[str, str]] = {
+    "taken": {
+        "en": "Noted — {medicine} is marked as taken.",
+        "ta": "பதிவு செய்யப்பட்டது — {medicine} எடுத்ததாகக் குறிக்கப்பட்டது.",
+        "hi": "दर्ज किया गया — {medicine} ली गई के रूप में चिह्नित है।",
+    },
+    "snooze": {
+        "en": "Snoozed — we will remind you about {medicine} again in {minutes} minutes.",
+        "ta": "தள்ளிவைக்கப்பட்டது — {minutes} நிமிடங்களில் {medicine} நினைவூட்டுவோம்.",
+        "hi": "स्नूज़ — {minutes} मिनट में {medicine} का फिर से रिमाइंडर आएगा।",
+    },
+    "skip": {
+        "en": "Noted — {medicine} skipped. Do not take a double dose at the next time.",
+        "ta": "பதிவு செய்யப்பட்டது — {medicine} தவிர்க்கப்பட்டது. அடுத்த முறை இரட்டிப்பு அளவு எடுக்க வேண்டாம்.",
+        "hi": "दर्ज किया गया — {medicine} छोड़ा गया। अगली बार दोगुनी खुराक न लें।",
+    },
+    "not_found": {
+        "en": "We could not find that reminder on your account. Ask us for your timetable any time.",
+        "ta": "உங்கள் கணக்கில் அந்த நினைவூட்டல் இல்லை. எப்போது வேண்டுமானாலும் உங்கள் அட்டவணையைக் கேளுங்கள்.",
+        "hi": "आपके खाते में वह रिमाइंडर नहीं मिला। कभी भी अपनी समय-सारणी पूछें।",
+    },
+    "no_recent": {
+        "en": "No recent reminder to act on. Your timetable is available any time — ask for your schedule.",
+        "ta": "செயல்படுத்த சமீபத்திய நினைவூட்டல் இல்லை. உங்கள் அட்டவணை எப்போது வேண்டுமானாலும் கிடைக்கும்.",
+        "hi": "कार्रवाई के लिए हालिया रिमाइंडर नहीं है। आपकी समय-सारणी कभी भी उपलब्ध है।",
+    },
+}
+
+
+def reply_hint(lang: str) -> str:
+    """The SMS reply-instruction line appended by the dispatcher."""
+    return REPLY_HINT.get(_check_lang(lang), REPLY_HINT["en"])
+
+
+def webhook_ack(key: str, lang: str, **fmt: object) -> str:
+    """A localized webhook acknowledgement (``fmt`` fills the placeholders)."""
+    table = WEBHOOK_ACKS.get(key) or WEBHOOK_ACKS["not_found"]
+    template = table.get(_check_lang(lang), table["en"])
+    try:
+        return template.format(**fmt)
+    except (KeyError, IndexError):
+        return template
+
 
 def _check_lang(lang: str) -> str:
-    if lang not in SUPPORTED_LANGUAGES:
-        raise UnsupportedLanguageError(
-            f"Unsupported language {lang!r}. Supported: {', '.join(SUPPORTED_LANGUAGES)}"
-        )
-    return lang
+    if lang in SUPPORTED_LANGUAGES:
+        return lang
+    if lang in FALLBACK_LANGUAGES:
+        # documented fallback (see FALLBACK_LANGUAGES): never invent text
+        return FALLBACK_LANGUAGES[lang]
+    raise UnsupportedLanguageError(
+        f"Unsupported language {lang!r}. Supported: {', '.join(SUPPORTED_LANGUAGES)}"
+    )
 
 
 def _duration_phrase(days: int, lang: str) -> str:

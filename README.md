@@ -19,9 +19,10 @@ users who manage many medicines.
 ## How it works
 
 ```
-Sign in (phone + OTP) → Upload photo/PDF → OCR (Tesseract eng+tam+hin) → line extraction
-                 → instruction parsing (dose, frequency, food timing, duration)
-                 → UNCERTAINTY GATE (never guesses)
+Register (name, 10-digit +91 number, language, channel) → phone + OTP sign-in
+                  → Upload photo/PDF → OCR (Gemini Vision, or Tesseract eng+tam+hin fallback)
+                 → line extraction + instruction parsing (dose, frequency, food timing, duration)
+                 → UNCERTAINTY GATE (never guesses — the model's confidence can never set status)
                  → human confirmation / edit for unclear lines
                  → translation (en / ta / hi) → 4-slot timetable
                  → reminders + printable PDF
@@ -39,9 +40,15 @@ Sign in (phone + OTP) → Upload photo/PDF → OCR (Tesseract eng+tam+hin) → l
 ## Tech stack
 
 * **Backend:** Python 3.11+, FastAPI, Uvicorn, Pydantic v2, SQLAlchemy + SQLite,
-  pytesseract (Tesseract), pdf2image, Pillow, OpenCV, ReportLab, pytest
-* **Frontend:** React 18, Vite, Tailwind CSS, react-router-dom, axios
-* **OCR languages:** `eng+tam+hin` (auto-falls back to `eng` if packs are missing)
+  pytesseract (Tesseract), `google-genai` (Gemini Vision), pdf2image, Pillow, OpenCV,
+  ReportLab, httpx, PyJWT, pytest
+* **Frontend:** React 18, Vite, Tailwind CSS, react-router-dom, axios,
+  Capacitor (Android build)
+* **OCR:** Gemini Vision (`gemini-2.5-flash`, `GEMINI_API_KEY`) with OpenCV shadow
+  removal as the primary reader; automatic Tesseract `eng+tam+hin` fallback when no
+  API key is configured (auto-falls back to `eng` if packs are missing)
+* **Delivery:** real WhatsApp Cloud API + Twilio SMS/voice adapters (or a recorded
+  fake channel in development)
 
 ---
 
@@ -70,12 +77,12 @@ medrecall/
 │   ├── requirements.txt  pytest.ini
 ├── frontend/                React + Vite + Tailwind app
 │   ├── src/
-│   │   ├── pages/           Home, Login, Upload, Review, Language, Timetable, Reminders, Agent
-│   │   ├── components/      Header, DoseCard, MedicineLine, WarningCard, Disclaimer, LanguageCard
+│   │   ├── pages/           Home, Login, Upload, Review, Language, Timetable, Reminders, Agent, NotFound
+│   │   ├── components/      Header, BottomNav, DoseCard, MedicineLine, WarningCard, Disclaimer, LanguageCard
 │   │   ├── i18n.jsx         UI translations en/ta/hi + language context
-│   │   ├── auth.jsx         session (OTP login), route guard, silent refresh
-│   │   ├── api.js reminders.js store.js
-│   │   └── main.jsx App.jsx
+│   │   ├── auth.jsx         session (register + OTP login), route guard, silent refresh
+│   │   ├── api.js reminders.js store.js index.css tailwind.config.js
+│   │   └── main.jsx App.jsx capacitor.config.json
 ├── sample_data/             prescription text fixtures + rx.png (real-OCR sample)
 ├── scripts/                 safety_audit.mjs · api_contract.mjs · frontend_verify.mjs
 ├── SAFETY_AUDIT.md          the enforced safety rule + audit results
@@ -180,8 +187,12 @@ The dev server proxies `/api` and `/uploads` to the backend on `:8000`
 
 > A timed, judge-ready walkthrough (and fallbacks) is in **[`DEMO_SCRIPT.md`](DEMO_SCRIPT.md)**.
 
-1. **Sign in** at `/login`: enter a phone number → *Send code* (dev mode shows
-   the code on screen and autofills it) → *Verify & continue*.
+1. **Create an account** at `/login` (or `/register`): full name, 10-digit
+   +91 mobile, preferred language (English / Hindi / Tamil / Telugu), preferred
+   channel (WhatsApp / SMS), optional caregiver number → *Create account & send
+   code*. Already registered? use the **Sign in** tab (phone → *Send code*; dev
+   mode shows the 6-digit code on screen and autofills the six OTP boxes) →
+   *Verify & sign in*.
 2. On **Home**, click **“Try demo prescription”** (or `POST /api/demo`).
 3. **Review** screen: 3 lines are ✅ *clear*, line 3 is ⚠️ *“Dose unreadable”*
    (“We won't guess.”) → **Edit manually** (e.g. `10 mg`) or **Confirm**.
@@ -203,13 +214,16 @@ Real upload: click **Scan prescription** and drop a JPG/PNG/PDF of a prescriptio
 
 ## API
 
-Every `/api/*` route except `/api/health` and the two OTP login routes requires
-`Authorization: Bearer <access token>` (phone + OTP login; dev mode echoes the
-code). Prescriptions are scoped to the caller — someone else's id is a 404.
+Every `/api/*` route except `/api/health`, the auth routes, and the two provider
+webhooks requires `Authorization: Bearer <access token>`. Signing in requires an
+**existing** account (an unknown number is a 404 `not_registered`); the auth
+endpoints return structured `{"detail":{"code","message",...}}` errors. Prescriptions
+are scoped to the caller — someone else's id is a 404.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/auth/otp/request` | request a phone OTP (dev echoes `dev_code`) |
+| `POST` | `/api/auth/register` | create an account (or reclaim an unverified one) + send the first code (201/200/409) |
+| `POST` | `/api/auth/otp/request` | request a phone OTP to a registered number (404 `not_registered` if new; dev echoes `dev_code`) |
 | `POST` | `/api/auth/otp/verify` | verify OTP → access token + refresh cookie |
 | `POST` | `/api/auth/refresh` | rotate the refresh token (cookie) |
 | `POST` | `/api/auth/logout` | end the session |
@@ -225,9 +239,12 @@ code). Prescriptions are scoped to the caller — someone else's id is a 404.
 | `POST/DELETE` | `/api/prescriptions/{id}/reminders/enroll` | start/stop the reminder engine for a prescription |
 | `GET` | `/api/reminders/upcoming?days=` | pending occurrences (patient-local times) |
 | `POST` | `/api/reminders/run` | one manual generate + dispatch tick |
-| `GET` | `/api/reminders/history` | sent / blocked / failed / missed occurrences |
+| `GET` | `/api/reminders/history` | sent / blocked / failed / missed occurrences (+ `patient_action`) |
+| `POST` | `/api/reminders/test` | send one real test message over a consented channel (403 `consent_required`) |
 | `POST` | `/api/agent/chat` | grounded answer from the caller's own verified data |
 | `GET` | `/api/agent/suggestions?lang=` | localized starter questions |
+| `GET/POST` | `/api/webhooks/whatsapp` | WhatsApp Cloud API inbound (hub.challenge; button replies update the occurrence) |
+| `POST` | `/api/webhooks/sms` | Twilio SMS inbound (TAKEN/SNOOZE/SKIP/HELP keywords → TwiML ack) |
 | `POST` | `/api/admin/login` | admin username + password → admin token (503 if unconfigured) |
 | `GET` | `/api/admin/stats` | dashboard counts: patients, items by status, reminders, consent |
 | `GET` | `/api/admin/patients?page=&page_size=` | paginated cross-patient list |
@@ -242,11 +259,17 @@ Item statuses: `clear | unclear | confirmed | edited`.
 SOS/PRN items never get a fixed-time reminder.
 
 Existing databases need the Alembic migrations before the first start:
-`cd backend && alembic upgrade head` (Phase 4 head: `a489a7b88ae5`).
+`cd backend && alembic upgrade head` (MedRecall 2.0 head: `b7d21e4a9c30`).
 
-Reminder delivery uses fake channels in development (sends are recorded, not
-sent). To deliver real WhatsApp/Twilio messages, set the provider variables
-from `.env.example`; unconfigured providers never report a reminder as sent.
+Reminder delivery uses a fake channel in development by default (sends are recorded,
+not sent) and real **WhatsApp Cloud API / Twilio SMS** in production. Set
+`MEDRECALL_CHANNEL_PROVIDER=live` plus the provider variables from `.env.example`
+to deliver for real; `auto` (the default) picks the live adapters in production and
+the fake adapter in development. Unconfigured providers never report a reminder as
+sent. Real reminders carry **interactive WhatsApp buttons** (Taken / Snooze 30m /
+Help) or SMS keywords (TAKEN / SNOOZE / SKIP / HELP); replies land on the
+`/api/webhooks/*` routes and update the occurrence (`patient_action` /
+`patient_action_at`).
 
 The **care agent** (`POST /api/agent/chat`) is read-only and answers only from
 the same verified timetable as the UI/PDF: it never diagnoses, changes a dose,
@@ -270,7 +293,7 @@ anything (`.env.example` lists the variables).
 
 ```bash
 cd backend
-pytest            # 390 tests: parser, gate, translation, safety invariants, auth, reminders, providers, agent, admin, API
+pytest            # 394 tests: parser, gate, translation, safety invariants, auth, reminders, providers, agent, admin, API
 ```
 
 What the suite covers:
@@ -302,13 +325,13 @@ The full audit report — enforcement chain, adversarial attempts, results and
 limitations — is in **[`SAFETY_AUDIT.md`](SAFETY_AUDIT.md)**. It is reproducible:
 
 ```bash
-# with the backend running on :8000, from the repo root
-node scripts/safety_audit.mjs      # 149 checks — static enforcement + live adversarial (incl. agent + admin + reminders)
-node scripts/api_contract.mjs      # 216 checks — every payload the eight pages consume
-node scripts/frontend_verify.mjs   # 252 checks — bundle, i18n, SSR of all 8 routes
+# with the backend running (default :8000; override with MEDRECALL_API), from the repo root
+node scripts/safety_audit.mjs      # 150 checks — static enforcement + live adversarial (incl. agent + admin + reminders)
+node scripts/api_contract.mjs      # 216 checks — every payload the pages consume
+node scripts/frontend_verify.mjs   # 252 checks — bundle, i18n, SSR of all routes
 ```
 
-Last run: pytest **390 passed**; audits **149 / 216 / 252 checks, 0 failures**.
+Last run: pytest **394 passed**; audits **150 / 216 / 252 checks, 0 failures**.
 The live audit tries to inject `status:"clear"` through five different PATCH
 payloads, uploads blank/oversize/empty files, and confirms the unclear demo line
 stays out of the schedule, PDF and reminders until it is confirmed — and appears

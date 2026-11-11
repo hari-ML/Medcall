@@ -3,9 +3,10 @@ import { agentChat, agentSuggestions, errorMessage } from '../api'
 import { useI18n } from '../i18n'
 
 /**
- * Care agent screen (Phase 7): a chat over the patient's OWN verified
- * timetable. The backend composes every answer (deterministic, en/ta/hi) and
- * marks it with `escalate` / `safety_blocked` / `disclaimer` / `sources`.
+ * Care agent screen (Cozy design system): a live chat over the patient's OWN
+ * verified timetable. The backend composes every answer (deterministic,
+ * en/ta/hi, optional guarded LLM) and marks it with `escalate` /
+ * `safety_blocked` / `disclaimer` / `sources`.
  *
  * SAFETY (client side): this page only renders what the API returns — it
  * never composes medical text, never fills in a dose/time, and always shows
@@ -36,7 +37,7 @@ export default function Agent() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView?.({ block: 'nearest' })
-  }, [messages])
+  }, [messages, busy])
 
   async function send(text) {
     const message = String(text || '').trim()
@@ -62,53 +63,65 @@ export default function Agent() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-slate-800">{t('agentTitle')}</h1>
-        <p className="mt-2 text-lg leading-relaxed text-slate-600">{t('agentIntro')}</p>
-      </div>
+      <header>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-lg font-medium leading-tight text-cozy-white">{t('agentTitle')}</h1>
+          <span className="chip">
+            <span aria-hidden="true" className="h-2 w-2 rounded-full bg-cozy-white" />
+            {t('liveChat')}
+          </span>
+        </div>
+        <p className="mt-2 text-sm leading-relaxed text-cozy-quiet">{t('agentIntro')}</p>
+        <p className="mt-2 text-xs text-cozy-subtle">{t('agentLiveHint')}</p>
+      </header>
 
       {/* conversation */}
-      <section className="card min-h-[16rem] space-y-4">
+      <section className="card min-h-[18rem] space-y-4">
         {messages.length === 0 ? (
-          <p className="py-6 text-center text-slate-500">{t('agentEmpty')}</p>
+          <p className="py-8 text-center text-sm text-cozy-quiet">{t('agentEmpty')}</p>
         ) : null}
 
         {messages.map((message, index) =>
           message.role === 'you' ? (
             <div key={index} className="flex justify-end">
-              <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-brand-700 px-4 py-3 text-white">
-                <div className="mb-1 text-sm font-semibold opacity-80">{t('agentYou')}</div>
-                <p className="whitespace-pre-wrap">{message.text}</p>
+              <div className="max-w-[85%] rounded-lg rounded-br-sm bg-cozy-white px-4 py-3 text-cozy-canvas shadow-sm">
+                <div className="mb-1 text-xs font-medium opacity-70">{t('agentYou')}</div>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.text}</p>
               </div>
             </div>
           ) : (
             <div key={index} className="flex justify-start">
-              <div className="max-w-[95%] space-y-2 rounded-2xl rounded-bl-sm border border-slate-200 bg-slate-50 px-4 py-3">
-                <div className="text-sm font-semibold text-slate-500">{t('appName')}</div>
+              <div className="max-w-[95%] space-y-2 rounded-lg rounded-bl-sm border border-cozy-border bg-cozy-elevated px-4 py-3">
+                <div className="text-xs font-medium text-cozy-quiet">{t('appName')}</div>
 
                 {message.answer?.escalate ? (
-                  <div role="alert" className="rounded-xl border-2 border-red-300 bg-red-50 p-3 font-semibold text-red-800">
-                    🚨 {t('agentEscalate')}
+                  <div
+                    role="alert"
+                    className="rounded-md border border-cozy-white bg-cozy-card p-3 text-sm font-medium text-cozy-white"
+                  >
+                    {t('agentEscalate')}
                   </div>
                 ) : null}
 
                 {message.answer?.safety_blocked ? (
-                  <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-3 font-semibold text-amber-900">
-                    🛑 {t('agentBlockedNote')}
+                  <div className="rounded-md border border-cozy-borderStrong bg-cozy-card p-3 text-sm text-cozy-quiet">
+                    {t('agentBlockedNote')}
                   </div>
                 ) : null}
 
-                <p className="whitespace-pre-wrap text-slate-800">{message.answer?.reply}</p>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-cozy-white">
+                  {message.answer?.reply}
+                </p>
 
                 {message.answer?.sources?.length ? (
-                  <p className="text-sm text-slate-500">
+                  <p className="text-xs text-cozy-subtle">
                     {t('agentSources')}{' '}
                     {message.answer.sources.map((source) => source.medicine).join(' · ')}
                   </p>
                 ) : null}
 
                 {message.answer?.disclaimer ? (
-                  <p className="border-t border-slate-200 pt-2 text-sm italic text-slate-500">
+                  <p className="border-t border-cozy-border pt-2 text-xs italic text-cozy-quiet">
                     {message.answer.disclaimer}
                   </p>
                 ) : null}
@@ -118,31 +131,32 @@ export default function Agent() {
         )}
 
         {busy ? (
-          <p className="text-slate-500" role="status">
-            {t('loading')}
-          </p>
+          <div className="flex justify-start" role="status" aria-live="polite">
+            <p className="rounded-full border border-cozy-border bg-cozy-input px-4 py-2 text-xs text-cozy-quiet">
+              {t('agentTyping')}
+            </p>
+          </div>
         ) : null}
         <div ref={bottomRef} />
       </section>
 
       {error ? (
-        <div role="alert" className="rounded-card border-2 border-red-300 bg-red-50 p-4 text-red-800">
+        <div role="alert" className="alert-error text-sm">
           {error}
         </div>
       ) : null}
 
       {/* suggestions */}
       {suggestions.length ? (
-        <div className="flex flex-wrap gap-2">
-          <span className="self-center text-sm font-semibold text-slate-500">
-            {t('agentSuggestions')}
-          </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-cozy-subtle">{t('agentSuggestions')}</span>
           {suggestions.map((question) => (
             <button
               key={question}
               type="button"
-              className="chip hover:bg-brand-50"
+              className="chip transition-colors duration-fast ease-cozy hover:border-cozy-white hover:text-cozy-white"
               onClick={() => send(question)}
+              disabled={busy}
             >
               {question}
             </button>

@@ -2,97 +2,232 @@
 @tailwind components;
 @tailwind utilities;
 
-/* MedRecall design system: calm healthcare (teal #0F766E + white),
-   LARGE readable text and big touch targets for elderly users. */
+/* MedRecall — Cozy design system.
+   Dark monochromatic canvas, bento cards, Inter, token-only values.
+   Canvas #121212 · Card #1E1E1E · Input #262626 · Elevated #2A2A2A
+   Primary/inverted #FFFFFF on #121212 · Secondary #3A3A3A
+   Radius 4 / 11 / 24 / full · Motion 0.15s cubic-bezier(0.23, 1, 0.32, 1) */
 
 @layer base {
   html {
-    /* 18px root => every rem-based Tailwind size scales to the 18px baseline */
-    font-size: 1.125rem;
+    font-size: 16px;
   }
 
   body {
-    @apply bg-slate-50 text-slate-800 antialiased;
-    font-family: system-ui, -apple-system, 'Segoe UI', 'Noto Sans Tamil',
-      'Noto Sans Devanagari', sans-serif;
+    @apply bg-cozy-canvas text-cozy-white antialiased;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, 'Noto Sans Tamil',
+      'Noto Sans Devanagari', 'Noto Sans Telugu', sans-serif;
+    font-weight: 400;
   }
 
-  /* visible keyboard focus everywhere */
+  /* Visible keyboard focus everywhere — solid white ring on the dark canvas. */
   :focus-visible {
-    outline: 3px solid #0f766e;
+    outline: 2px solid #ffffff;
     outline-offset: 2px;
     border-radius: 4px;
   }
 
   ::selection {
-    @apply bg-brand-100 text-brand-900;
+    @apply bg-cozy-white text-cozy-canvas;
+  }
+
+  /* Dark native controls (date pickers, select dropdowns). */
+  select option {
+    @apply bg-cozy-elevated text-cozy-white;
+  }
+
+  input[type='checkbox'] {
+    accent-color: #ffffff;
   }
 }
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-6 py-4
-      text-lg font-semibold transition-colors select-none;
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-md
+      px-6 py-4 text-sm font-medium transition-colors duration-fast ease-cozy
+      disabled:cursor-not-allowed disabled:opacity-40;
   }
 
   .btn-primary {
-    @apply btn bg-brand-700 text-white shadow-md hover:bg-brand-800
-      active:bg-brand-900;
+    @apply btn bg-cozy-white text-cozy-canvas shadow-sm
+      hover:bg-cozy-quiet active:bg-cozy-muted;
   }
 
   .btn-secondary {
-    @apply btn bg-white text-brand-700 border-2 border-brand-700
-      hover:bg-brand-50 active:bg-brand-100;
+    @apply btn bg-cozy-secondary text-cozy-white
+      hover:bg-cozy-elevated active:bg-cozy-input;
+  }
+
+  .btn-outlined {
+    @apply btn border border-cozy-borderStrong bg-transparent text-cozy-quiet
+      hover:border-cozy-white hover:text-cozy-white active:bg-cozy-elevated;
   }
 
   .btn-quiet {
-    @apply btn bg-slate-100 text-slate-700 hover:bg-slate-200;
+    @apply btn bg-transparent text-cozy-quiet
+      hover:bg-cozy-elevated hover:text-cozy-white active:bg-cozy-input;
   }
 
   .btn-danger-soft {
-    @apply btn bg-amber-50 text-amber-800 border-2 border-amber-400
-      hover:bg-amber-100;
+    @apply btn border border-cozy-borderStrong bg-transparent text-cozy-quiet
+      hover:border-cozy-white hover:text-cozy-white active:bg-cozy-elevated;
   }
 
   .btn-disabled {
-    @apply btn bg-slate-200 text-slate-500 cursor-not-allowed shadow-none;
+    @apply btn cursor-not-allowed bg-cozy-elevated text-cozy-subtle shadow-none;
   }
 
   .btn-sm {
-    @apply px-4 py-2 text-base rounded-xl;
+    @apply rounded-md px-4 py-2 text-xs;
   }
 
   .card {
-    @apply bg-white rounded-card border border-slate-200 shadow-sm p-6;
+    @apply rounded-lg border border-cozy-border bg-cozy-card p-6 shadow-md;
+  }
+
+  .card-elevated {
+    @apply rounded-lg border border-cozy-border bg-cozy-elevated p-6 shadow-md;
   }
 
   .chip {
-    @apply inline-flex items-center gap-1 rounded-full px-3 py-1
-      bg-slate-100 text-slate-700 text-base font-medium;
+    @apply inline-flex items-center gap-1 rounded-full bg-cozy-elevated px-3 py-1
+      text-xs font-medium text-cozy-quiet;
   }
 
   .chip-ok {
-    @apply inline-flex items-center gap-1 rounded-full px-3 py-1
-      bg-emerald-50 text-emerald-700 text-base font-medium;
+    @apply inline-flex items-center gap-1 rounded-full bg-cozy-white px-3 py-1
+      text-xs font-medium text-cozy-canvas;
   }
 
   .chip-warn {
-    @apply inline-flex items-center gap-1 rounded-full px-3 py-1
-      bg-amber-50 text-amber-800 text-base font-medium;
+    @apply inline-flex items-center gap-1 rounded-full border border-cozy-white
+      bg-transparent px-3 py-1 text-xs font-medium text-cozy-white;
   }
 
   .chip-teal {
-    @apply inline-flex items-center gap-1 rounded-full px-3 py-1
-      bg-brand-50 text-brand-700 text-base font-medium;
+    @apply inline-flex items-center gap-1 rounded-full border border-cozy-border
+      bg-cozy-elevated px-3 py-1 text-xs font-medium text-cozy-white;
   }
 
   .input {
-    @apply w-full rounded-xl border-2 border-slate-200 bg-white px-4 py-3
-      text-lg text-slate-800 placeholder:text-slate-400
-      focus:border-brand-600 focus:outline-none;
+    @apply w-full rounded-md border border-cozy-border bg-cozy-input px-4 py-3
+      text-base text-cozy-white transition-colors duration-fast ease-cozy
+      placeholder:text-cozy-subtle hover:border-cozy-borderStrong
+      focus:border-cozy-white focus:outline-none
+      disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .input-error {
+    @apply input border-cozy-white;
   }
 
   .label {
-    @apply block text-base font-semibold text-slate-600 mb-1;
+    @apply mb-1 block text-sm font-medium text-cozy-quiet;
+  }
+
+  .alert {
+    @apply rounded-lg border border-cozy-border bg-cozy-card p-5 text-base;
+  }
+
+  .alert-error {
+    @apply alert border-cozy-white text-cozy-white;
+  }
+
+  .alert-info {
+    @apply alert border-cozy-border bg-cozy-elevated text-cozy-quiet;
+  }
+
+  .link {
+    @apply rounded-sm text-cozy-white underline decoration-cozy-borderStrong
+      underline-offset-4 transition-colors duration-fast ease-cozy
+      hover:decoration-cozy-white;
+  }
+
+  /* 6-box one-time-code input */
+  .otp-box {
+    @apply h-13 w-11 rounded-md border border-cozy-border bg-cozy-input
+      text-center text-base font-medium text-cozy-white caret-cozy-white
+      transition-colors duration-fast ease-cozy
+      hover:border-cozy-borderStrong focus:border-cozy-white focus:outline-none;
+  }
+
+  .otp-box-error {
+    @apply otp-box border-cozy-white;
+  }
+
+  /* 48px white circular "magic" action */
+  .magic-button {
+    @apply inline-flex h-13 w-13 items-center justify-center rounded-full
+      bg-cozy-white text-cozy-canvas shadow-sm transition-transform
+      duration-fast ease-cozy hover:scale-105 active:scale-95
+      disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .switch {
+    @apply inline-flex items-center gap-2 rounded-full border border-cozy-border
+      bg-cozy-elevated px-4 py-2 text-xs font-medium text-cozy-quiet
+      transition-colors duration-fast ease-cozy
+      hover:border-cozy-borderStrong hover:text-cozy-white;
+  }
+
+  .switch-on {
+    @apply switch border-cozy-white bg-cozy-white text-cozy-canvas;
+  }
+
+  .tab {
+    @apply flex-1 rounded-md px-4 py-3 text-sm font-medium text-cozy-quiet
+      transition-colors duration-fast ease-cozy hover:text-cozy-white;
+  }
+
+  .tab-active {
+    @apply tab bg-cozy-white text-cozy-canvas shadow-sm hover:text-cozy-canvas;
+  }
+
+  .bottom-nav {
+    @apply fixed inset-x-0 bottom-6 z-40 mx-auto flex w-fit items-center gap-2
+      rounded-lg border border-cozy-border bg-cozy-elevated p-2 shadow-md;
+  }
+
+  .bottom-nav-link {
+    @apply flex h-13 w-13 items-center justify-center rounded-full text-cozy-quiet
+      transition-colors duration-fast ease-cozy hover:text-cozy-white;
+  }
+
+  .bottom-nav-active {
+    @apply bottom-nav-link bg-cozy-white text-cozy-canvas shadow-sm
+      hover:text-cozy-canvas;
+  }
+
+  .progress-track {
+    @apply h-2 w-full overflow-hidden rounded-full bg-cozy-elevated;
+  }
+
+  .progress-bar {
+    @apply h-2 rounded-full bg-cozy-white transition-all duration-fast ease-cozy;
+  }
+}
+
+@layer utilities {
+  .animate-shake {
+    animation: cozy-shake 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+  }
+}
+
+@keyframes cozy-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-6px);
+  }
+  40% {
+    transform: translateX(6px);
+  }
+  60% {
+    transform: translateX(-4px);
+  }
+  80% {
+    transform: translateX(4px);
   }
 }

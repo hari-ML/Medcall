@@ -25,6 +25,9 @@ const FOOD_OPTIONS = [
   { value: 'empty_stomach', key: 'foodEmpty' },
 ]
 
+//: OCR confidence below this is highlighted for human review (0-100 scale).
+const LOW_CONFIDENCE = 80
+
 function statusLabel(t, status) {
   const map = {
     clear: t('statusClear'),
@@ -50,7 +53,7 @@ function blankDraft(item) {
  * One extracted prescription line on the Review screen.
  *
  * Safety behaviour (the heart of the app):
- *  - status `unclear` → amber warning with the exact reason + "We won't guess",
+ *  - status `unclear` → warning with the exact reason + "We won't guess",
  *    buttons: Confirm / Edit manually / Ask pharmacist. It is clearly marked
  *    "Not added to timetable yet".
  *  - Confirm  → onConfirm(item)  (backend sets status `confirmed`)
@@ -58,6 +61,9 @@ function blankDraft(item) {
  *               if complete, stays `unclear` if still incomplete)
  *  Both callbacks return the updated item, or `false` to signal failure
  *  (the form stays open so no input is lost).
+ *
+ * A confidence below 80 is highlighted even for clear lines — the number is
+ * informational only and never changes a status (the gate owns that).
  */
 export default function MedicineLine({ item, onConfirm, onEdit, busy = false }) {
   const { t, localizeReason } = useI18n()
@@ -66,6 +72,7 @@ export default function MedicineLine({ item, onConfirm, onEdit, busy = false }) 
   const [localBusy, setLocalBusy] = useState(false)
 
   const isUnclear = item.status === 'unclear'
+  const isLowConfidence = item.confidence != null && item.confidence < LOW_CONFIDENCE
   const disabled = busy || localBusy
   const lineLabel = t('line', { n: item.line_number ?? '?' })
 
@@ -132,7 +139,7 @@ export default function MedicineLine({ item, onConfirm, onEdit, busy = false }) 
 
   return (
     <article
-      className={`card ${isUnclear ? 'border-2 border-amber-400' : ''}`}
+      className={`card ${isUnclear || isLowConfidence ? 'border-cozy-white' : ''}`}
       aria-label={lineLabel}
     >
       {/* header: line number + status + OCR confidence */}
@@ -142,15 +149,28 @@ export default function MedicineLine({ item, onConfirm, onEdit, busy = false }) 
           {statusLabel(t, item.status)}
         </span>
         {item.status !== 'edited' && item.confidence != null ? (
-          <span className="chip">{t('confidence', { n: Math.round(item.confidence) })}</span>
+          <span className={`chip ${isLowConfidence ? 'border border-cozy-white text-cozy-white' : ''}`}>
+            {t('confidence', { n: Math.round(item.confidence) })}
+          </span>
+        ) : null}
+        {isLowConfidence ? (
+          <span className="chip-warn">{t('lowConfidence', { n: Math.round(item.confidence) })}</span>
         ) : null}
         {isUnclear ? <span className="chip-warn">{t('notAddedYet')}</span> : null}
       </header>
 
       {/* the raw OCR text, so the user can compare it with the original image */}
-      <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 leading-relaxed text-slate-700">
+      <p
+        className={`mt-3 rounded-md border p-3 leading-relaxed text-cozy-quiet ${
+          isLowConfidence ? 'border-cozy-white bg-cozy-input' : 'border-cozy-border bg-cozy-input'
+        }`}
+      >
         “{item.source_text}”
       </p>
+
+      {isLowConfidence ? (
+        <p className="mt-2 text-xs text-cozy-quiet">{t('lowConfidenceHint')}</p>
+      ) : null}
 
       {/* what MedRecall understood (only meaningful parts shown) */}
       {summary.length ? (
@@ -166,7 +186,7 @@ export default function MedicineLine({ item, onConfirm, onEdit, busy = false }) 
       {isUnclear ? (
         <div className="mt-4 space-y-4">
           <WarningCard title={t('statusUnclear')} body={t('weWontGuess')}>
-            <p className="mt-2 text-lg font-semibold text-amber-900">
+            <p className="mt-2 text-sm font-medium text-cozy-white">
               {localizeReason(item.reason)}
             </p>
           </WarningCard>
@@ -182,11 +202,11 @@ export default function MedicineLine({ item, onConfirm, onEdit, busy = false }) 
             </button>
             <button
               type="button"
-              className="btn-secondary btn-sm"
+              className="btn-outlined btn-sm"
               onClick={() => setDraft(draft ? null : blankDraft(item))}
               disabled={disabled}
             >
-              ✏️ {t('editManually')}
+              {t('editManually')}
             </button>
             <button
               type="button"
@@ -194,20 +214,18 @@ export default function MedicineLine({ item, onConfirm, onEdit, busy = false }) 
               onClick={handleCopy}
               disabled={disabled}
             >
-              💬 {copied ? t('copied') : t('askPharmacist')}
+              {copied ? t('copied') : t('askPharmacist')}
             </button>
           </div>
 
-          <div className="rounded-xl bg-slate-50 p-4">
-            <div className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-              {t('pharmacistMsgLabel')}
-            </div>
-            <p className="mt-1 whitespace-pre-line leading-relaxed text-slate-700">
+          <div className="rounded-md border border-cozy-border bg-cozy-input p-4">
+            <div className="text-xs font-medium text-cozy-subtle">{t('pharmacistMsgLabel')}</div>
+            <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-cozy-quiet">
               {pharmacistMessage()}
             </p>
           </div>
 
-          <p className="text-base text-slate-500">{t('confirmHint')}</p>
+          <p className="text-xs text-cozy-subtle">{t('confirmHint')}</p>
         </div>
       ) : (
         <div className="mt-4 flex justify-end">
@@ -217,15 +235,15 @@ export default function MedicineLine({ item, onConfirm, onEdit, busy = false }) 
             onClick={() => setDraft(blankDraft(item))}
             disabled={disabled}
           >
-            ✏️ {t('editManually')}
+            {t('editManually')}
           </button>
         </div>
       )}
 
       {/* manual edit form — human input is re-parsed AND re-gated by the API */}
       {draft ? (
-        <form className="mt-5 rounded-xl border border-slate-200 bg-white p-5" onSubmit={handleSubmit}>
-          <h4 className="text-lg font-bold text-slate-800">{t('editManually')}</h4>
+        <form className="mt-5 rounded-md border border-cozy-border bg-cozy-input p-5" onSubmit={handleSubmit}>
+          <h4 className="text-base font-medium text-cozy-white">{t('editManually')}</h4>
 
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>

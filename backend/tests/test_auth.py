@@ -9,12 +9,12 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
-from conftest import PRIMARY_PHONE, otp_login
+from conftest import PRIMARY_PHONE, otp_login, register_patient
 
 from app.core.config import get_settings
 from app.db import SessionLocal
 from app.main import app
-from app.models import OtpCode, Prescription
+from app.models import OtpCode, Patient, Prescription
 
 
 def _fresh_phone() -> str:
@@ -27,19 +27,97 @@ def _wrong_code(code: str) -> str:
 
 
 def _request_code(client, phone: str) -> str:
-    response = client.post("/api/auth/otp/request", json={"phone": phone})
-    assert response.status_code == 200, response.text
-    return response.json()["dev_code"]
+    """Register the phone (the sign-in flow requires an account) and return
+    the dev-echoed OTP code."""
+    return register_patient(client, phone)["dev_code"]
 
 
 # ---------------------------------------------------------------------------
-# OTP request / verify
+# Registration + OTP request / verify
 # ---------------------------------------------------------------------------
+
+
+def test_register_creates_account_and_returns_dev_code():
+    client = TestClient(app)
+    phone = _fresh_phone()
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "phone": phone,
+            "full_name": "New Patient",
+            "preferred_lang": "ta",
+            "preferred_channel": "sms",
+            "caregiver_phone": "+919999999999",
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["dev_code"].isdigit() and len(body["dev_code"]) == 6
+    assert body["expires_in"] == 600
+    assert body["sent_via"] == "sms"
+    assert body["message"]
+
+    db = SessionLocal()
+    try:
+        patient = db.query(Patient).filter(Patient.phone == phone).first()
+        assert patient is not None
+        assert patient.phone_verified is False
+        assert patient.full_name == "New Patient"
+        assert patient.preferred_lang == "ta"
+        assert patient.preferred_channel == "sms"
+        assert patient.caregiver_phone == "+919999999999"
+    finally:
+        db.close()
+
+
+def test_register_duplicate_verified_phone_is_409():
+    client = TestClient(app)
+    phone = _fresh_phone()
+    otp_login(client, phone, "Already Verified")
+    response = client.post(
+        "/api/auth/register",
+        json={"phone": phone, "full_name": "Duplicate"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "already_registered"
+
+
+def test_register_reclaims_an_unverified_account():
+    client = TestClient(app)
+    phone = _fresh_phone()
+    first = register_patient(client, phone, "First Name")
+    assert first["dev_code"]
+    second = client.post(
+        "/api/auth/register",
+        json={
+            "phone": phone,
+            "full_name": "Corrected Name",
+            "preferred_lang": "hi",
+            "preferred_channel": "whatsapp",
+        },
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["dev_code"]
+    code = second.json()["dev_code"]
+    verified = client.post("/api/auth/otp/verify", json={"phone": phone, "code": code})
+    assert verified.status_code == 200
+    assert verified.json()["patient"]["full_name"] == "Corrected Name"
+    assert verified.json()["patient"]["preferred_lang"] == "hi"
+
+
+def test_sign_in_with_unregistered_phone_is_404():
+    client = TestClient(app)
+    response = client.post(
+        "/api/auth/otp/request", json={"phone": _fresh_phone()}
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "not_registered"
 
 
 def test_otp_request_returns_dev_code_in_development():
     client = TestClient(app)
     phone = _fresh_phone()
+    register_patient(client, phone)
     response = client.post("/api/auth/otp/request", json={"phone": phone})
     assert response.status_code == 200
     body = response.json()
@@ -59,8 +137,10 @@ def test_otp_verify_wrong_code_is_rejected():
     phone = _fresh_phone()
     code = _request_code(client, phone)
     response = client.post("/api/auth/otp/verify", json={"phone": phone, "code": _wrong_code(code)})
-    assert response.status_code == 400
-    assert "ncorrect" in response.json()["detail"]
+    assert response.status_code == 401
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_otp"
+    assert detail["attempts_left"] == 4
 
 
 def test_otp_verify_creates_patient_and_issues_tokens():
@@ -104,7 +184,8 @@ def test_otp_verify_expired_code_is_rejected():
     finally:
         db.close()
     response = client.post("/api/auth/otp/verify", json={"phone": phone, "code": code})
-    assert response.status_code == 400
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "otp_expired"
 
 
 def test_otp_five_wrong_attempts_lock_the_code():
@@ -114,28 +195,40 @@ def test_otp_five_wrong_attempts_lock_the_code():
     wrong = _wrong_code(code)
     for _ in range(5):
         response = client.post("/api/auth/otp/verify", json={"phone": phone, "code": wrong})
-        assert response.status_code == 400
+        assert response.status_code == 401
+        assert response.json()["detail"]["code"] == "invalid_otp"
     response = client.post("/api/auth/otp/verify", json={"phone": phone, "code": wrong})
     assert response.status_code == 429
+    assert response.json()["detail"]["code"] == "too_many_attempts"
 
 
 def test_otp_request_rate_limited_per_phone():
     client = TestClient(app)
     phone = _fresh_phone()
-    for _ in range(5):
+    register_patient(client, phone)  # counts as the first request
+    for _ in range(4):
         assert client.post("/api/auth/otp/request", json={"phone": phone}).status_code == 200
     response = client.post("/api/auth/otp/request", json={"phone": phone})
     assert response.status_code == 429
+    detail = response.json()["detail"]
+    assert detail["code"] == "rate_limited"
+    assert detail["retry_after"] >= 1
 
 
-def test_otp_request_refused_in_production(monkeypatch):
+def test_otp_delivery_refused_in_production(monkeypatch):
+    # Register in development first so the phone exists, then switch to
+    # production: the dev echo is forbidden and no real provider is set, so
+    # the send is a 503 no_channel — never a silent success.
+    client = TestClient(app)
+    phone = _fresh_phone()
+    register_patient(client, phone)
     monkeypatch.setenv("MEDRECALL_ENV", "production")
     get_settings.cache_clear()
     try:
-        client = TestClient(app)
-        response = client.post("/api/auth/otp/request", json={"phone": _fresh_phone()})
+        response = client.post("/api/auth/otp/request", json={"phone": phone})
         assert response.status_code == 503
-        assert "not configured" in response.json()["detail"].lower()
+        assert response.json()["detail"]["code"] == "no_channel"
+        assert "dev_code" not in response.json()
     finally:
         get_settings.cache_clear()
 
@@ -191,7 +284,8 @@ def test_refresh_replay_revokes_the_whole_family():
     client.cookies.set("medrecall_refresh", first, path="/api/auth")
     replay = client.post("/api/auth/refresh")
     assert replay.status_code == 401
-    assert "reuse" in replay.json()["detail"].lower()
+    assert replay.json()["detail"]["code"] == "session_reuse"
+    assert "reuse" in replay.json()["detail"]["message"].lower()
 
     # the whole family is now dead, including the newest token
     client.cookies.set("medrecall_refresh", current, path="/api/auth")

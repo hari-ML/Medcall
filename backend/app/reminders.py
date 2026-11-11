@@ -41,6 +41,8 @@ from .channels import (
     REMINDER_CHANNELS,
     ChannelDeliveryError,
     ChannelNotConfigured,
+    InteractiveButton,
+    InteractiveMessage,
     adapter_for,
 )
 from .core.config import get_settings
@@ -55,7 +57,7 @@ from .models import (
 )
 from .parser import slots_for_frequency
 from .schedule import SLOT_DEFAULT_TIMES, is_as_needed, is_scheduleable
-from .translate import get_translator
+from .translate import get_translator, reply_hint
 
 logger = logging.getLogger("medrecall.reminders")
 
@@ -569,7 +571,23 @@ def dispatch_due(
 
         try:
             body = build_message(schedule, state)
-            result = adapter.send(patient.phone, body, lang=schedule.lang or "en")
+            lang = schedule.lang or "en"
+            interactive = None
+            if channel == "whatsapp":
+                # Real reply buttons; the ids come back through the inbound
+                # webhook and only ever reference this occurrence — they never
+                # carry a dose or a time of their own.
+                interactive = InteractiveMessage(
+                    buttons=[
+                        InteractiveButton(id=f"TAKEN_{occurrence.id}", title="Taken"),
+                        InteractiveButton(id=f"SNOOZE_{occurrence.id}", title="Snooze 30m"),
+                        InteractiveButton(id=f"HELP_{occurrence.id}", title="Help"),
+                    ]
+                )
+            elif channel == "sms":
+                # Plain SMS has no buttons: append the keyword instructions.
+                body = f"{body}\n{reply_hint(lang)}"
+            result = adapter.send(patient.phone, body, lang=lang, interactive=interactive)
         except ChannelNotConfigured as exc:
             occurrence.status = "failed"
             occurrence.error = str(exc)
@@ -620,6 +638,81 @@ def dispatch_due(
 
     db.commit()
     return counts
+
+
+# ---------------------------------------------------------------------------
+# Inbound reply actions (WhatsApp / SMS webhooks, Part 3)
+# ---------------------------------------------------------------------------
+
+
+def recent_occurrence(
+    db: Session, patient_id: int, occurrence_id: int | None = None
+) -> ReminderOccurrence | None:
+    """The occurrence an inbound reply refers to, or None.
+
+    Button ids carry the exact occurrence (``TAKEN_123``). Plain SMS keywords
+    have no id, so they target the patient's most recent occurrence from the
+    last 24 hours — never an arbitrary or future dose.
+    """
+    query = db.query(ReminderOccurrence).filter(
+        ReminderOccurrence.patient_id == patient_id
+    )
+    if occurrence_id is not None:
+        return query.filter(ReminderOccurrence.id == occurrence_id).first()
+    cutoff = _now() - timedelta(hours=24)
+    return (
+        query.filter(ReminderOccurrence.scheduled_at >= cutoff)
+        .order_by(ReminderOccurrence.scheduled_at.desc())
+        .first()
+    )
+
+
+def record_patient_action(
+    db: Session, occurrence: ReminderOccurrence, action: str
+) -> None:
+    """Record what the patient answered; never changes the delivery status.
+
+    ``taken`` / ``snooze`` / ``skip`` / ``help`` are audit facts about the
+    patient's response, not medical decisions — the timetable is unchanged.
+    """
+    occurrence.patient_action = action[:16]
+    occurrence.patient_action_at = _now()
+    db.commit()
+
+
+def snooze_occurrence(
+    db: Session, occurrence: ReminderOccurrence, minutes: int
+) -> ReminderOccurrence | None:
+    """Create a one-off pending occurrence ``minutes`` after the original.
+
+    The snooze reuses the original schedule (and therefore the same verified
+    item); no body is copied. The dispatcher re-checks every safety gate
+    before the new occurrence can be sent. Returns None when an occurrence
+    already exists at that exact time (idempotent webhook retries).
+    """
+    if occurrence.schedule_id is None:
+        return None
+    target = occurrence.scheduled_at + timedelta(minutes=max(1, minutes))
+    exists = (
+        db.query(ReminderOccurrence.id)
+        .filter(
+            ReminderOccurrence.schedule_id == occurrence.schedule_id,
+            ReminderOccurrence.scheduled_at == target,
+        )
+        .first()
+    )
+    if exists is not None:
+        return None
+    snoozed = ReminderOccurrence(
+        schedule_id=occurrence.schedule_id,
+        patient_id=occurrence.patient_id,
+        scheduled_at=target,
+        status="pending",
+    )
+    db.add(snoozed)
+    db.commit()
+    db.refresh(snoozed)
+    return snoozed
 
 
 # ---------------------------------------------------------------------------

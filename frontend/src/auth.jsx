@@ -1,15 +1,17 @@
 /**
- * MedRecall session layer (Phase 7): phone + OTP login, token persistence,
- * silent refresh, and route protection.
+ * MedRecall session layer (Phase 7, MedRecall 2.0): registration + phone OTP
+ * sign-in, token persistence, silent refresh, and route protection.
  *
  * - The access token lives in localStorage (`medrecall:session`); the rotating
  *   refresh token stays in the backend's httpOnly cookie (path /api/auth), so
  *   XSS can read only the short-lived access token.
  * - api.js gets the token through a registered bridge (no circular import)
  *   and performs ONE silent refresh + retry when a protected call 401s.
+ * - When the refresh cookie is dead the session is cleared and a one-shot
+ *   `sessionNotice` explains why the user is back on /login.
  * - SSR / verification renders pass `initialSession` to <App> (the same seam
- *   `initialLang` already provides), so server rendering never touches
- *   localStorage and never redirects.
+ *   `initialLang` provides), so server rendering never touches localStorage
+ *   and never redirects.
  *
  * SAFETY: this layer only handles identity. It never touches item statuses,
  * never builds instructions and sends no medical content anywhere.
@@ -21,6 +23,7 @@ import {
   getProfile,
   logoutSession,
   refreshSession,
+  registerAccount,
   requestOtp,
   verifyOtp,
 } from './api'
@@ -60,6 +63,9 @@ const FALLBACK = {
   session: null,
   patient: null,
   isAuthed: false,
+  sessionNotice: null,
+  clearSessionNotice: () => {},
+  register: async () => ({ message: '', expires_in: 0 }),
   requestCode: async () => ({ message: '', expires_in: 0 }),
   completeLogin: async () => null,
   logout: async () => {},
@@ -70,6 +76,8 @@ export function AuthProvider({ children, initialSession }) {
     if (initialSession) return initialSession // explicit override (tests / SSR)
     return readStoredSession()
   })
+  //: 'expired' | null — shown once on the login screen after a lost session.
+  const [sessionNotice, setSessionNotice] = useState(null)
 
   const applySession = useCallback((next) => {
     setSession(next)
@@ -89,22 +97,43 @@ export function AuthProvider({ children, initialSession }) {
           return next
         })
       },
-      sessionLost: () => setSession(null),
+      sessionLost: () => {
+        setSession((prev) => {
+          if (prev) setSessionNotice('expired')
+          return null
+        })
+        writeStoredSession(null)
+      },
     })
     return () => attachAuthBridge(null)
   }, [session])
 
-  // Expired token on first client render → try the refresh cookie once.
+  // Expired token on first client render → try the refresh cookie once. A dead
+  // cookie is a lost session, not a silent redirect: the login screen explains.
   useEffect(() => {
     if (!session?.access_token || session.expires_at == null) return
     if (Date.now() < session.expires_at - 60_000) return
     refreshSession()
       .then((data) => setSession((prev) => (prev ? withToken(prev, data) : prev)))
       .catch(() => {
-        /* no valid cookie → the route guard will send the user to /login */
+        setSession(null)
+        writeStoredSession(null)
+        setSessionNotice('expired')
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const register = useCallback(
+    async ({ phone, full_name: fullName, preferred_lang: preferredLang, preferred_channel: preferredChannel, caregiver_phone: caregiverPhone }) =>
+      registerAccount({
+        phone,
+        full_name: fullName,
+        preferred_lang: preferredLang,
+        preferred_channel: preferredChannel,
+        caregiver_phone: caregiverPhone,
+      }),
+    [],
+  )
 
   const requestCode = useCallback(async (phone) => requestOtp(phone), [])
 
@@ -118,6 +147,7 @@ export function AuthProvider({ children, initialSession }) {
         expires_at: Date.now() + (data.expires_in || 0) * 1000,
         patient,
       })
+      setSessionNotice(null)
       return patient
     },
     [applySession],
@@ -130,6 +160,7 @@ export function AuthProvider({ children, initialSession }) {
       /* already invalid — clear locally regardless */
     }
     applySession(null)
+    setSessionNotice(null)
   }, [applySession])
 
   const value = useMemo(
@@ -137,11 +168,14 @@ export function AuthProvider({ children, initialSession }) {
       session,
       patient: session?.patient || null,
       isAuthed: Boolean(session?.access_token),
+      sessionNotice,
+      clearSessionNotice: () => setSessionNotice(null),
+      register,
       requestCode,
       completeLogin,
       logout,
     }),
-    [session, requestCode, completeLogin, logout],
+    [session, sessionNotice, register, requestCode, completeLogin, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any, Iterable, Mapping
 
 #: The four fixed daily slots (QID also uses "evening").
 SLOTS = ("morning", "afternoon", "evening", "night")
@@ -479,3 +480,189 @@ def parse_line(text: str, ocr_confidence: float = 100.0) -> ParsedLine:
     )
 
     return line
+
+
+# ---------------------------------------------------------------------------
+# Structured medicine synthesis (Gemini Vision path, Part 3)
+# ---------------------------------------------------------------------------
+
+#: Local clock windows -> fixed daily slot (night wraps past midnight).
+_SLOT_HOURS: tuple[tuple[str, int, int], ...] = (
+    ("morning", 5, 11),
+    ("afternoon", 11, 16),
+    ("evening", 16, 21),
+    ("night", 21, 5),
+)
+
+
+def _clock_hour(value: object) -> int | None:
+    """Best-effort hour (0-23) from '08:00', '8 am', '21.30' … or None."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    match = re.search(r"\b(\d{1,2})(?::|\.)(\d{2})\b", text)
+    if match:
+        hour = int(match.group(1)) % 24
+        if re.search(r"\bpm\b", text) and hour < 12:
+            hour += 12
+        if re.search(r"\bam\b", text) and hour == 12:
+            hour = 0
+        return hour % 24
+    match = re.search(r"\b(\d{1,2})\s*(am|pm)\b", text)
+    if match:
+        hour = int(match.group(1)) % 12
+        if match.group(2) == "pm":
+            hour += 12
+        return hour % 24
+    return None
+
+
+def _slot_for_hour(hour: int) -> str:
+    for slot, start, end in _SLOT_HOURS:
+        if start <= end:
+            if start <= hour < end:
+                return slot
+        elif hour >= start or hour < end:  # night wraps midnight
+            return slot
+    return "morning"
+
+
+def _frequency_token(frequency: object, times: object) -> str | None:
+    """Normalized frequency code for a structured medicine (or None).
+
+    Prefers the model's own frequency text when it maps onto the parser's
+    vocabulary; otherwise derives a code from the explicit intake times.
+    Returning None is deliberate — a missing frequency makes the gate mark
+    the line unclear instead of inventing a schedule.
+    """
+    text = str(frequency or "").strip()
+    if text:
+        if re.fullmatch(r"\d-\d-\d", text):
+            return text
+        for rx, code in _CODE_PATTERNS:
+            if rx.search(text):
+                return code
+        for rx, code in _FREQ_PHRASES:
+            if rx.search(text):
+                return code
+        if re.search(r"\b(?:SOS|PRN)\b", text, re.IGNORECASE) or re.search(
+            r"\bas\s+needed\b|\bwhen\s+required\b", text, re.IGNORECASE
+        ):
+            return "SOS"
+        match = _TIMES_A_DAY_RE.search(text) or _TIMES_DAILY_RE.search(text)
+        if match:
+            code = _TIMES_TO_CODE.get(int(match.group(1)))
+            if code:
+                return code
+        lowered = text.lower()
+        for word, count in (("once", 1), ("twice", 2), ("thrice", 3)):
+            if word in lowered:
+                return _TIMES_TO_CODE.get(count)
+        match = re.search(r"\b(\d{1,2})\s*(?:x|times)\b", text, re.IGNORECASE)
+        if match:
+            return _TIMES_TO_CODE.get(int(match.group(1)))
+        # unrecognized free-form frequency -> fall through to explicit times
+
+    if isinstance(times, str):
+        times = re.split(r"[,;/\s]+", times)
+    slots: list[str] = []
+    for value in times or []:
+        hour = _clock_hour(value)
+        if hour is None:
+            continue
+        slot = _slot_for_hour(hour)
+        if slot not in slots:
+            slots.append(slot)
+    if not slots:
+        return None
+    if len(slots) == 1:
+        return "HS" if slots[0] == "night" else "OD"
+    return _TIMES_TO_CODE.get(len(slots))
+
+
+def _meal_token(meal: object) -> str:
+    """Food-timing phrase the parser recognizes, from free-form model text."""
+    text = str(meal or "").strip().lower()
+    if not text:
+        return ""
+    if "empty" in text:
+        return "on an empty stomach"
+    if "before" in text:
+        return "before food"
+    if "after" in text:
+        return "after food"
+    if "with" in text:
+        return "with food"
+    return ""
+
+
+def _form_token(form: object) -> str:
+    return FORMS.get(str(form or "").strip().lower().rstrip("."), "") or ""
+
+
+def _dosage_token(dosage: object) -> str:
+    """The dosage string only when it contains a real strength ('500 mg')."""
+    text = str(dosage or "").strip()
+    if not text or not _STRENGTH_RE.search(text):
+        return ""
+    return text
+
+
+def synthesize_medicine_line(medicine: Mapping[str, Any]) -> str | None:
+    """One parseable prescription line from a structured medicine row.
+
+    The Gemini Vision path produces structured JSON; this turns each row
+    back into the same line format Tesseract output uses, so it flows
+    through the identical extract -> parse -> gate pipeline. The gate — not
+    the model — still decides clear/unclear. Returns None when the row has
+    no usable medicine name (nothing a human could review).
+    """
+    name = str(medicine.get("name") or "").strip()
+    if not name:
+        return None
+    parts: list[str] = []
+    form = _form_token(medicine.get("form"))
+    if form:
+        parts.append(form)
+    parts.append(name)
+    dosage = _dosage_token(medicine.get("dosage"))
+    if dosage:
+        parts.append(dosage)
+    frequency = _frequency_token(medicine.get("frequency"), medicine.get("times"))
+    if frequency:
+        parts.append(frequency)
+    meal = _meal_token(medicine.get("meal_instruction"))
+    if meal:
+        parts.append(meal)
+    try:
+        duration = int(medicine.get("duration_days") or 0)
+    except (TypeError, ValueError):
+        duration = 0
+    if duration > 0:
+        parts.append(f"x {duration} days")
+    return " ".join(parts)
+
+
+def synthesize_medicine_lines(
+    medicines: Iterable[Mapping[str, Any]],
+) -> list[tuple[str, float]]:
+    """(line, confidence 0-100) pairs for structured medicine rows.
+
+    A row the model flagged (``uncertainty_reason``) is capped below the
+    gate's 70% threshold, so it is surfaced for human confirmation instead
+    of being trusted — the model's confidence can never promote a line.
+    """
+    lines: list[tuple[str, float]] = []
+    for medicine in medicines:
+        line = synthesize_medicine_line(medicine)
+        if line is None:
+            continue
+        try:
+            confidence = float(medicine.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        confidence = min(max(confidence, 0.0), 1.0)
+        if medicine.get("uncertainty_reason"):
+            confidence = min(confidence, 0.69)
+        lines.append((line, round(confidence * 100, 1)))
+    return lines

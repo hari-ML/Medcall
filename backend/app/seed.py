@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 from sqlalchemy.orm import Session
 
-from .extract import extract_medicine_lines
+from .extract import CandidateLine, extract_medicine_lines
 from .models import MedicineItem, Prescription
-from .ocr import OcrLine, ocr_file
-from .parser import parse_line
+from .ocr import OcrLine, ocr_bundle
+from .parser import parse_line, synthesize_medicine_lines
 from .uncertainty import gate
 
 #: Prefilled demo prescription: three clear lines + one "Dose unreadable"
@@ -52,16 +53,37 @@ def create_prescription_from_ocr(
     content_type: str = "",
     lang: str = "en",
     patient_id: int | None = None,
+    structured: Sequence[Mapping[str, Any]] | None = None,
 ) -> Prescription:
     """Run extract -> parse -> gate on OCR lines and persist a prescription.
 
     ``patient_id`` (Phase 2) records the owning account; rows created before
     accounts existed stay NULL orphans and are invisible to every patient.
 
+    ``structured`` (Part 3) carries Gemini Vision's structured medicine rows.
+    Each row is synthesized back into a prescription line and pushed through
+    the *same* extract -> parse -> gate pipeline, so the model can never
+    assign a status: the gate stays the only authority. When synthesis yields
+    nothing usable the raw OCR lines are used instead.
+
     Raises ValueError if no medicine lines are found (caller decides the
     HTTP error). Commits the session.
     """
-    candidates = extract_medicine_lines(ocr_lines)
+    candidates: list[CandidateLine] = []
+    if structured:
+        synthesized = synthesize_medicine_lines(structured)
+        synth_lines = [
+            OcrLine(text=text, confidence=confidence)
+            for text, confidence in synthesized
+        ]
+        candidates = extract_medicine_lines(synth_lines)
+        if not candidates and synthesized:
+            candidates = [
+                CandidateLine(text=text, confidence=confidence, line_number=index)
+                for index, (text, confidence) in enumerate(synthesized, start=1)
+            ]
+    if not candidates:
+        candidates = extract_medicine_lines(ocr_lines)
     if not candidates:
         raise ValueError(
             "No medicine lines could be detected in this file. "
@@ -157,12 +179,13 @@ def _cli() -> None:  # pragma: no cover - manual tool
             )
             print(f"Prescription #{rx.id} from {args.text}: {len(rx.items)} items.")
         elif args.image:
-            lines = ocr_file(args.image)
+            bundle = ocr_bundle(args.image)
             rx = create_prescription_from_ocr(
-                db, lines,
+                db, bundle.lines,
                 image_filename=Path(args.image).name,
                 original_filename=Path(args.image).name,
                 content_type="image",
+                structured=[row.as_dict() for row in bundle.structured],
             )
             print(f"Prescription #{rx.id} from {args.image}: {len(rx.items)} items.")
         for item in rx.items:

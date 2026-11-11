@@ -16,13 +16,14 @@ from __future__ import annotations
 
 from datetime import timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
+from ..channels import ChannelDeliveryError, ChannelNotConfigured, adapter_for
 from ..core.config import get_settings
 from ..core.deps import get_current_patient
 from ..db import get_db
-from ..models import Patient, ReminderOccurrence
+from ..models import ConsentRecord, Patient, ReminderOccurrence
 from ..reminders import (
     _now,
     deactivate_prescription_schedules,
@@ -31,7 +32,14 @@ from ..reminders import (
     patient_timezone,
     tick,
 )
-from ..schemas import EnrollmentOut, OccurrenceOut, ReminderRunOut
+from ..schemas import (
+    EnrollmentOut,
+    OccurrenceOut,
+    ReminderRunOut,
+    ReminderTestIn,
+    ReminderTestOut,
+)
+from ..translate import reply_hint
 from .serializers import _get_owned_prescription
 
 router = APIRouter()
@@ -59,6 +67,8 @@ def _occurrence_out(row: ReminderOccurrence, patient: Patient) -> OccurrenceOut:
         error=row.error,
         attempts=row.attempts,
         next_attempt_at=row.next_attempt_at,
+        patient_action=row.patient_action,
+        patient_action_at=row.patient_action_at,
         sent_at=row.sent_at,
     )
 
@@ -131,6 +141,72 @@ def run_reminders(
 ) -> ReminderRunOut:
     """Generate + dispatch the caller's due reminders once."""
     return ReminderRunOut(**tick(db, patient_id=patient.id))
+
+
+@router.post("/api/reminders/test", response_model=ReminderTestOut)
+def send_test_reminder(
+    body: ReminderTestIn | None = None,
+    patient: Patient = Depends(get_current_patient),
+    db: Session = Depends(get_db),
+) -> ReminderTestOut:
+    """Send one real test message over a consented channel.
+
+    The test message contains no medical content. It still obeys the hard
+    consent gate: without an explicit grant for the channel the request is a
+    403 ``consent_required`` (default deny stays default deny). An
+    unconfigured provider is a 502 — a test can never pretend to succeed.
+    """
+    requested = ((body.channel if body else None) or patient.preferred_channel).strip().lower()
+    if requested not in ("whatsapp", "sms", "voice"):
+        raise HTTPException(status_code=422, detail="Unknown reminder channel.")
+
+    consent = (
+        db.query(ConsentRecord)
+        .filter(
+            ConsentRecord.patient_id == patient.id,
+            ConsentRecord.channel == requested,
+            ConsentRecord.granted.is_(True),
+        )
+        .first()
+    )
+    if consent is None:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "consent_required",
+                "message": f"Grant {requested} consent before sending a test message.",
+            },
+        )
+
+    adapter = adapter_for(requested)
+    if not adapter.configured:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "channel_unavailable",
+                "message": f"The {requested} provider is not configured for this deployment.",
+            },
+        )
+
+    text = "MedRecall test message: your reminder channel is connected. Reply HELP for help."
+    if requested == "sms":
+        text = f"{text}\n{reply_hint(patient.preferred_lang)}"
+    try:
+        result = adapter.send(patient.phone, text, lang=patient.preferred_lang)
+    except ChannelNotConfigured as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "channel_unavailable", "message": str(exc)},
+        ) from exc
+    except ChannelDeliveryError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "delivery_failed", "message": str(exc)},
+        ) from exc
+
+    return ReminderTestOut(
+        channel=result.channel, sent=True, message_id=result.message_id
+    )
 
 
 @router.get("/api/reminders/history", response_model=list[OccurrenceOut])

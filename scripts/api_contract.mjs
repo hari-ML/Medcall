@@ -82,15 +82,20 @@ console.log('== backend up: /api/health')
   check(typeof body?.version === 'string' && body.version, 'health.version missing')
 }
 
-// --- A2. OTP login (Phase 2: every record endpoint is patient-scoped) ------
+// --- A2. register + OTP login (every record endpoint is patient-scoped) ----
 {
   const phone = '+9198' + Array.from({ length: 7 }, () => Math.floor(Math.random() * 10)).join('')
-  const req = await jsonBody('/api/auth/otp/request', {
+  const req = await jsonBody('/api/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone }),
+    body: JSON.stringify({
+      phone,
+      full_name: 'Contract Patient',
+      preferred_lang: 'en',
+      preferred_channel: 'whatsapp',
+    }),
   })
-  check(req.status === 200, `otp request -> ${req.status}`)
+  check(req.status === 201, `register -> ${req.status}`)
   check(/^\d{6}$/.test(req.body?.dev_code || ''), 'otp dev_code missing (dev mode expected)')
   const ver = await jsonBody('/api/auth/otp/verify', {
     method: 'POST',

@@ -20,42 +20,30 @@ export default function LanguageCard({ code, selected, onSelect }) {
       onClick={() => onSelect(code)}
       aria-pressed={selected}
       aria-label={`${meta.label}${selected ? ` — ${t('selected')}` : ''}`}
-      className={`card w-full text-left transition-colors ${
+      className={`w-full rounded-lg border bg-cozy-card p-5 text-left shadow-md transition-colors duration-fast ease-cozy ${
         selected
-          ? 'border-2 border-brand-700 ring-4 ring-brand-100'
-          : 'border border-slate-200 hover:border-brand-400'
+          ? 'border-cozy-white'
+          : 'border-cozy-border hover:border-cozy-borderStrong'
       }`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-2xl font-bold text-slate-800">{meta.native}</div>
-          <div className="text-base text-slate-500">{meta.label}</div>
-        </div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-base font-medium text-cozy-white">{meta.native}</span>
         <span
           aria-hidden="true"
-          className={`inline-flex h-9 w-9 items-center justify-center rounded-full text-lg font-bold ${
-            selected ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-400'
+          className={`flex h-6 w-6 items-center justify-center rounded-full border text-xs ${
+            selected
+              ? 'border-cozy-white bg-cozy-white text-cozy-canvas'
+              : 'border-cozy-borderStrong text-transparent'
           }`}
         >
           ✓
         </span>
       </div>
-
-      <div className="mt-4 rounded-xl bg-slate-50 p-4">
-        <div className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          {t('preview')}
-        </div>
-        <div className="mt-1 text-lg text-slate-800">{preview}</div>
-        <div className="mt-2 text-base font-semibold text-brand-700">☀️ {morning}</div>
-      </div>
-
-      <div className="mt-4">
-        {selected ? (
-          <span className="chip-teal">✓ {t('selected')}</span>
-        ) : (
-          <span className="chip">{t('choose')}</span>
-        )}
-      </div>
+      <p className="mt-3 text-sm leading-relaxed text-cozy-quiet">{preview}</p>
+      <p className="mt-3 text-xs text-cozy-subtle">
+        {morning} · {t('preview')}
+        {selected ? <span className="ml-2 text-cozy-white">· {t('selected')}</span> : null}
+      </p>
     </button>
   )
 }

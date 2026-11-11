@@ -7,11 +7,42 @@ import { setLastPrescription } from '../store'
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'application/pdf']
 const MAX_BYTES = 10 * 1024 * 1024
 
+const STEP_KEYS = ['ocrStepUpload', 'ocrStepPreprocess', 'ocrStepRead', 'ocrStepExtract', 'ocrStepVerify']
+
+function StepRow({ label, state }) {
+  return (
+    <li className="flex items-center gap-3">
+      <span
+        aria-hidden="true"
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs ${
+          state === 'done'
+            ? 'border-cozy-white bg-cozy-white text-cozy-canvas'
+            : state === 'active'
+              ? 'border-cozy-white text-cozy-white'
+              : 'border-cozy-border text-cozy-subtle'
+        }`}
+      >
+        {state === 'done' ? '✓' : state === 'active' ? '•' : ''}
+      </span>
+      <span
+        className={`text-sm ${
+          state === 'pending' ? 'text-cozy-subtle' : 'text-cozy-quiet'
+        } ${state === 'active' ? 'animate-pulse text-cozy-white' : ''}`}
+      >
+        {label}
+      </span>
+    </li>
+  )
+}
+
 /**
- * Upload screen: big drag & drop zone (JPG/PNG/PDF ≤ 10 MB), file picker,
- * camera capture, and the zero-dependency demo alternative. Client-side
- * validation mirrors the backend (415/413/400) so users get instant feedback;
- * on success we jump straight to /review/:id.
+ * Upload screen (Cozy design system).
+ *
+ * Camera capture, gallery/file picker and drag & drop (JPG/PNG/PDF ≤ 10 MB),
+ * plus the zero-dependency demo prescription. The progress panel follows the
+ * real upload percentage and then the server-side OCR stages; it never
+ * advances on a timer. On success we jump straight to /review/:id, where any
+ * line below 80% confidence is highlighted for human review.
  */
 export default function Upload() {
   const { t } = useI18n()
@@ -20,7 +51,7 @@ export default function Upload() {
   const cameraInput = useRef(null)
 
   const [dragging, setDragging] = useState(false)
-  const [progress, setProgress] = useState(null) // null = idle, 0-100 = uploading
+  const [progress, setProgress] = useState(null) // null = idle, 0-100 = working
   const [error, setError] = useState(null)
   const [demoBusy, setDemoBusy] = useState(false)
 
@@ -71,15 +102,30 @@ export default function Upload() {
     handleFile(file)
   }
 
+  function stepState(index) {
+    if (progress === null) return 'pending'
+    if (index === 0) return progress >= 100 ? 'done' : 'active'
+    if (progress >= 100) {
+      // The file is fully uploaded; the backend is now cleaning the image,
+      // running OCR and extracting medicines. We can't know exact sub-stage
+      // boundaries, so these steps stay active until the response arrives.
+      if (index === STEP_KEYS.length - 1) return 'pending'
+      return 'active'
+    }
+    return 'pending'
+  }
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <div>
+      <header>
         <Link to="/" className="btn-quiet btn-sm inline-flex">
           ← {t('back')}
         </Link>
-        <h1 className="mt-4 text-3xl font-bold text-slate-800">{t('uploadTitle')}</h1>
-        <p className="mt-2 text-lg text-slate-600">{t('uploadHint')}</p>
-      </div>
+        <h1 className="mt-5 text-lg font-medium leading-tight text-cozy-white">
+          {t('uploadTitle')}
+        </h1>
+        <p className="mt-2 text-sm leading-relaxed text-cozy-quiet">{t('uploadHint')}</p>
+      </header>
 
       {/* drop zone */}
       <div
@@ -103,17 +149,28 @@ export default function Upload() {
           setDragging(false)
           handleFile(event.dataTransfer?.files?.[0])
         }}
-        className={`cursor-pointer rounded-card border-4 border-dashed p-10 text-center transition-colors ${
-          dragging ? 'border-brand-600 bg-brand-50' : 'border-slate-300 bg-white hover:border-brand-400'
-        } ${uploading ? 'pointer-events-none opacity-60' : ''}`}
+        className={`cursor-pointer rounded-lg border border-dashed bg-cozy-card p-10 text-center shadow-md transition-colors duration-fast ease-cozy ${
+          dragging ? 'border-cozy-white bg-cozy-elevated' : 'border-cozy-borderStrong hover:border-cozy-white'
+        } ${uploading ? 'pointer-events-none opacity-50' : ''}`}
       >
-        <div className="text-5xl" aria-hidden="true">
-          {dragging ? '📥' : '📄'}
-        </div>
-        <p className="mt-4 text-xl font-semibold text-slate-800">
+        <span className="mx-auto flex h-13 w-13 items-center justify-center rounded-full border border-cozy-borderStrong text-cozy-white">
+          <svg
+            viewBox="0 0 24 24"
+            className="h-6 w-6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            aria-hidden="true"
+          >
+            <path d="M4 8h3l2-3h6l2 3h3v12H4Z" />
+            <circle cx="12" cy="13" r="4" />
+          </svg>
+        </span>
+        <p className="mt-5 text-base font-medium text-cozy-white">
           {dragging ? t('dropActive') : t('dropHere')}
         </p>
-        <p className="mt-1 text-slate-500">{t('dropFormats')}</p>
+        <p className="mt-1 text-xs text-cozy-subtle">{t('dropFormats')}</p>
 
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <button
@@ -125,7 +182,7 @@ export default function Upload() {
             }}
             disabled={uploading}
           >
-            📸 {t('takePhoto')}
+            {t('takePhoto')}
           </button>
           <button
             type="button"
@@ -136,29 +193,39 @@ export default function Upload() {
             }}
             disabled={uploading}
           >
-            📁 {t('chooseFile')}
+            {t('chooseFile')}
           </button>
         </div>
       </div>
 
-      {/* upload progress */}
+      {/* stepped progress — driven by real upload + server OCR response */}
       {progress !== null ? (
-        <div className="card" role="status">
-          <div className="text-lg font-semibold text-slate-700">
-            {t('uploading')} {progress}%
+        <section className="card" role="status" aria-live="polite">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-medium text-cozy-white">{t('uploading')}</h2>
+            <span className="chip">{Math.round(progress)}%</span>
           </div>
-          <div className="mt-3 h-4 w-full overflow-hidden rounded-full bg-slate-200">
-            <div
-              className="h-4 rounded-full bg-brand-600 transition-all duration-300"
-              style={{ width: `${Math.max(progress, 5)}%` }}
-            />
+          <div className="progress-track mt-3">
+            <div className="progress-bar" style={{ width: `${Math.max(progress, 4)}%` }} />
           </div>
+          <ol className="mt-5 space-y-3">
+            {STEP_KEYS.map((key, index) => (
+              <StepRow key={key} label={t(key)} state={stepState(index)} />
+            ))}
+          </ol>
+          <p className="mt-4 text-xs text-cozy-subtle">{t('ocrStepHint')}</p>
+        </section>
+      ) : null}
+
+      {demoBusy ? (
+        <div className="card text-sm text-cozy-quiet" role="status">
+          {t('loading')}
         </div>
       ) : null}
 
       {/* error */}
       {error ? (
-        <div role="alert" className="rounded-card border-2 border-red-300 bg-red-50 p-4 text-lg text-red-800">
+        <div role="alert" className="alert-error text-sm">
           {error}
         </div>
       ) : null}
@@ -166,11 +233,11 @@ export default function Upload() {
       {/* demo alternative */}
       <div className="card flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="text-lg font-semibold text-slate-800">{t('noPrescription')}</div>
-          <p className="text-base text-slate-500">{t('dropFormats')}</p>
+          <div className="text-base font-medium text-cozy-white">{t('noPrescription')}</div>
+          <p className="mt-1 text-xs text-cozy-subtle">{t('dropFormats')}</p>
         </div>
-        <button type="button" className="btn-secondary" onClick={handleDemo} disabled={uploading}>
-          {demoBusy ? t('loading') : `⚡ ${t('tryDemo')}`}
+        <button type="button" className="btn-outlined" onClick={handleDemo} disabled={uploading}>
+          {demoBusy ? t('loading') : t('tryDemo')}
         </button>
       </div>
 

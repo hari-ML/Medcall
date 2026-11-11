@@ -321,15 +321,22 @@ if (!ready) {
   process.exit(1)
 }
 
-section('B0. login as a throwaway audit patient (Phase 2 auth)')
+section('B0. register + log in as a throwaway audit patient (Phase 2/3 auth)')
 {
   const phone = '+9198' + Array.from({ length: 7 }, () => Math.floor(Math.random() * 10)).join('')
-  const req = await hit('/api/auth/otp/request', {
+  const req = await hit('/api/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone }),
+    body: JSON.stringify({
+      phone,
+      full_name: 'Audit Patient',
+      preferred_lang: 'en',
+      preferred_channel: 'whatsapp',
+    }),
   })
-  check(req.status === 200 && /^\d{6}$/.test(req.body?.dev_code || ''), `otp request -> ${req.status}`)
+  check(req.status === 201 && /^\d{6}$/.test(req.body?.dev_code || ''),
+    `register -> ${req.status}`)
+  check(req.body?.sent_via === 'whatsapp', `register sent_via -> ${req.body?.sent_via}`)
   const ver = await hit('/api/auth/otp/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -544,10 +551,15 @@ section('B13. AI care agent answers only from the verified timetable')
   // A fresh patient guarantees the agent sees exactly one demo prescription
   // (the audit patient above accumulates confirmed/edited prescriptions).
   const phone13 = '+9198' + Array.from({ length: 7 }, () => Math.floor(Math.random() * 10)).join('')
-  const req13 = await hit('/api/auth/otp/request', {
+  const req13 = await hit('/api/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone: phone13 }),
+    body: JSON.stringify({
+      phone: phone13,
+      full_name: 'Agent Audit Patient',
+      preferred_lang: 'en',
+      preferred_channel: 'whatsapp',
+    }),
   })
   const verify13 = await hit('/api/auth/otp/verify', {
     method: 'POST',

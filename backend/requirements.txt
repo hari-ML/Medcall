@@ -30,6 +30,9 @@ Pillow>=10.3
 opencv-python>=4.9
 numpy>=1.26
 pdf2image>=1.17
+# Gemini Vision OCR path (Part 3). Imported lazily — without GEMINI_API_KEY
+# the app never touches it, and without the package Tesseract still works.
+google-genai>=1.0
 
 # --- PDF generation ------------------------------------------------------
 reportlab>=4.1

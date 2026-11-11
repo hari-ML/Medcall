@@ -55,6 +55,46 @@ export function takenCount(prescriptionId, doseItemIds, date = todayStr()) {
 }
 
 // ---------------------------------------------------------------------------
+// "Snooze 30m" — per dose, per day. Snoozing never changes a medicine or a
+// prescribed time; it only postpones the dashboard's next-dose prompt locally.
+// ---------------------------------------------------------------------------
+
+const SNOOZE_KEY = 'medrecall:snoozed'
+
+function loadAllSnoozes() {
+  try {
+    const raw = localStorage.getItem(SNOOZE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveAllSnoozes(data) {
+  try {
+    localStorage.setItem(SNOOZE_KEY, JSON.stringify(data))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** {doseKey: epochMillis} for the given prescription on the given day. */
+export function loadSnoozes(prescriptionId, date = todayStr()) {
+  const all = loadAllSnoozes()
+  return (all[prescriptionId] && all[prescriptionId][date]) || {}
+}
+
+/** Postpone one dose prompt for `minutes`; returns the new snooze map. */
+export function snoozeDose(prescriptionId, doseKey, minutes = 30, date = todayStr()) {
+  const all = loadAllSnoozes()
+  if (!all[prescriptionId]) all[prescriptionId] = {}
+  if (!all[prescriptionId][date]) all[prescriptionId][date] = {}
+  all[prescriptionId][date][doseKey] = Date.now() + Math.max(1, minutes) * 60_000
+  saveAllSnoozes(all)
+  return { ...all[prescriptionId][date] }
+}
+
+// ---------------------------------------------------------------------------
 // "Last opened prescription" — lets the Home dashboard show today's progress
 // without asking the user for an id.
 // ---------------------------------------------------------------------------

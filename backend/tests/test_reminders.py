@@ -740,7 +740,14 @@ class _StubAdapter(ChannelAdapter):
     def configured(self) -> bool:
         return True
 
-    def send(self, to_phone: str, body: str, *, lang: str = "en") -> DeliveryResult:
+    def send(
+        self,
+        to_phone: str,
+        body: str,
+        *,
+        lang: str = "en",
+        interactive=None,
+    ) -> DeliveryResult:
         self.calls += 1
         if self.calls <= self.failures:
             raise ChannelDeliveryError(

@@ -47,14 +47,58 @@ PRIMARY_PHONE = "+919812300001"
 OTHER_PHONE = "+919812300002"
 
 
+def register_patient(
+    client,
+    phone: str,
+    full_name: str = "Test Patient",
+    *,
+    preferred_lang: str = "en",
+    preferred_channel: str = "whatsapp",
+) -> dict:
+    """Register (or reclaim) an account and return the OTP response body.
+
+    The dev server echoes ``dev_code``; production would deliver it over the
+    selected channel and return no code.
+    """
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "phone": phone,
+            "full_name": full_name or "Test Patient",
+            "preferred_lang": preferred_lang,
+            "preferred_channel": preferred_channel,
+        },
+    )
+    assert response.status_code in (200, 201), response.text
+    body = response.json()
+    assert body.get("dev_code"), "dev_code missing — is MEDRECALL_ENV production?"
+    return body
+
+
 def otp_login(client, phone: str, full_name: str = "") -> str:
     """Dev-mode phone-OTP login; returns the access token.
 
-    The refresh cookie lands in the client's cookie jar as a side effect.
+    Registers the phone first (the app no longer creates accounts on login),
+    then verifies the echoed code. The refresh cookie lands in the client's
+    cookie jar as a side effect.
     """
-    response = client.post("/api/auth/otp/request", json={"phone": phone})
-    assert response.status_code == 200, response.text
-    code = response.json().get("dev_code")
+    registration = client.post(
+        "/api/auth/register",
+        json={
+            "phone": phone,
+            "full_name": full_name or "Test Patient",
+            "preferred_lang": "en",
+            "preferred_channel": "whatsapp",
+        },
+    )
+    if registration.status_code in (200, 201):
+        code = registration.json().get("dev_code")
+    elif registration.status_code == 409:
+        response = client.post("/api/auth/otp/request", json={"phone": phone})
+        assert response.status_code == 200, response.text
+        code = response.json().get("dev_code")
+    else:
+        raise AssertionError(registration.text)
     assert code, "dev_code missing — is MEDRECALL_ENV set to production?"
     payload: dict = {"phone": phone, "code": code}
     if full_name:

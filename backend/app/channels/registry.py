@@ -19,10 +19,16 @@ _ADAPTERS: dict[str, type[ChannelAdapter]] = {
 def adapter_for(channel: str, settings: Settings | None = None) -> ChannelAdapter:
     """The adapter for ``channel``.
 
-    * configured real provider -> use it
-    * development + fake mode  -> FakeChannel (records the send)
-    * production, unconfigured -> the real adapter (reports configured=False;
-      the dispatcher then marks the occurrence failed — never "sent")
+    Resolution (``Settings.effective_channel_provider``; the plain
+    ``CHANNEL_PROVIDER`` env var wins, production can never resolve to fake):
+
+    * ``live`` — always the real provider (configured or not; an
+      unconfigured adapter fails honestly rather than pretending).
+    * ``fake`` — the development recording channel.
+    * ``auto`` — the real provider when its credentials exist, otherwise the
+      fake channel in development, otherwise the real adapter in production
+      (reports ``configured=False`` — the dispatcher marks the occurrence
+      ``failed``, never "sent").
     """
     try:
         adapter_class = _ADAPTERS[channel]
@@ -30,7 +36,13 @@ def adapter_for(channel: str, settings: Settings | None = None) -> ChannelAdapte
         raise ValueError(f"Unknown reminder channel: {channel!r}") from None
 
     resolved = settings or get_settings()
+    provider = resolved.effective_channel_provider
+    if provider == "fake":
+        return FakeChannel(channel)
+
     real = adapter_class(settings=resolved)
+    if provider == "live":
+        return real
     if real.configured:
         return real
     if resolved.use_fake_channels:

@@ -7,7 +7,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-LangCode = Literal["en", "ta", "hi"]
+LangCode = Literal["en", "ta", "hi", "te"]
+ChannelCode = Literal["whatsapp", "sms", "voice"]
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +138,25 @@ class OtpRequestIn(BaseModel):
     phone: str = Field(min_length=7, max_length=20)
 
 
+class RegisterIn(BaseModel):
+    """Registration details collected before the OTP is verified.
+
+    ``preferred_channel`` decides where the OTP itself is delivered
+    (WhatsApp or SMS); voice is reminder-only and cannot carry an OTP.
+    """
+
+    phone: str = Field(min_length=7, max_length=20)
+    full_name: str = Field(min_length=1, max_length=255)
+    preferred_lang: LangCode = "en"
+    preferred_channel: Literal["whatsapp", "sms"] = "whatsapp"
+    caregiver_phone: Optional[str] = Field(default=None, max_length=20)
+
+
 class OtpRequestOut(BaseModel):
     message: str
     expires_in: int
+    #: channel the code was actually dispatched over (whatsapp | sms | fake)
+    sent_via: str = ""
     #: ONLY present in non-production environments (no SMS provider yet).
     dev_code: Optional[str] = None
 
@@ -162,6 +179,7 @@ class PatientOut(BaseModel):
     phone_verified: bool
     full_name: str
     preferred_lang: str
+    preferred_channel: str = "whatsapp"
     timezone: str
     caregiver_name: str = ""
     caregiver_phone: str = ""
@@ -178,12 +196,10 @@ class LoginOut(BaseModel):
 class PatientUpdateIn(BaseModel):
     full_name: Optional[str] = Field(default=None, max_length=255)
     preferred_lang: Optional[LangCode] = None
+    preferred_channel: Optional[ChannelCode] = None
     timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
     caregiver_name: Optional[str] = Field(default=None, max_length=255)
     caregiver_phone: Optional[str] = Field(default=None, max_length=20)
-
-
-ChannelCode = Literal["whatsapp", "sms", "voice"]
 
 
 class ConsentIn(BaseModel):
@@ -239,6 +255,9 @@ class OccurrenceOut(BaseModel):
     attempts: int = 0
     #: naive UTC; set only while a transient failure waits for its retry
     next_attempt_at: Optional[datetime] = None
+    #: inbound button/keyword action recorded by the webhook (taken/snooze/…)
+    patient_action: Optional[str] = None
+    patient_action_at: Optional[datetime] = None
     sent_at: Optional[datetime] = None
 
 
@@ -249,6 +268,17 @@ class ReminderRunOut(BaseModel):
     failed: int
     missed: int
     cancelled: int
+
+
+class ReminderTestIn(BaseModel):
+    #: None -> the patient's preferred channel (still consent-gated)
+    channel: Optional[ChannelCode] = None
+
+
+class ReminderTestOut(BaseModel):
+    channel: str
+    sent: bool
+    message_id: str = ""
 
 
 # ---------------------------------------------------------------------------
