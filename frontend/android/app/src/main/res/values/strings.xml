@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MedCall</string>
+    <string name="title_activity_main">MedCall</string>
+    <string name="package_name">com.medcall.ai</string>
+    <string name="custom_url_scheme">com.medcall.ai</string>
+</resources>
